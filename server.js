@@ -8,7 +8,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 // ============================================================================
-// 0. PATCH GLOBAL NODE.JS UNTUK BUG WA WEB 2.3000.x (_serialized -> $1 = Error "r")
+// 0. PATCH GLOBAL NODE.JS UNTUK WA WEB 2.3000.x (_serialized -> $1)
 // ============================================================================
 if (!Object.getOwnPropertyDescriptor(Object.prototype, '_serialized')) {
     Object.defineProperty(Object.prototype, '_serialized', {
@@ -160,7 +160,7 @@ client.inject = async function (...args) {
     isInjecting = true;
     try {
         await originalInject(...args);
-        setTimeout(() => injectWhatsAppPatches().catch(() => {}), 500);
+        setTimeout(() => injectWhatsAppPatches().catch(() => {}), 400);
     } catch (err) {
         const msg = err?.message || String(err);
         if (!msg.includes('Execution context was destroyed') && !msg.includes('Target closed')) {
@@ -185,6 +185,7 @@ async function safeEvaluate(pageFn, ...args) {
                 return null;
             }
         }
+        console.error('[Eval Error]:', msg);
         return null;
     }
 }
@@ -206,11 +207,11 @@ function getInitials(name) {
 }
 
 // ============================================================================
-// 3. PATCH INTERNAL WHATSAPP WEB 2026 (FIX ERROR "r" / _serialized -> $1)
+// 3. PATCH INTERNAL WA WEB 2026 & BRIDGE WAWebCollections KE window.Store
 // ============================================================================
 async function injectWhatsAppPatches() {
     await safeEvaluate(() => {
-        // 1. Polyfill Global _serialized -> $1 di dalam Browser WA Web (Solusi Utama Error "r")
+        // 1. Polyfill Global _serialized -> $1
         if (!Object.getOwnPropertyDescriptor(Object.prototype, '_serialized')) {
             Object.defineProperty(Object.prototype, '_serialized', {
                 get() {
@@ -235,12 +236,81 @@ async function injectWhatsAppPatches() {
             });
         }
 
-        // 2. Pastikan window.onCodeReceivedEvent tersedia untuk Pairing Code 8 Digit
+        // 2. Hubungkan semua koleksi WAWebCollections ke window.Store agar tidak pernah undefined!
+        try {
+            const cols = window.require('WAWebCollections');
+            if (!window.Store) window.Store = {};
+            if (cols) {
+                Object.keys(cols).forEach(k => {
+                    if (!window.Store[k]) window.Store[k] = cols[k];
+                });
+            }
+        } catch (e) {}
+
+        // 3. Helper Global __IGLASS__ di dalam Browser
+        window.__IGLASS__ = {
+            getCols() {
+                try {
+                    return window.require('WAWebCollections') || window.Store || {};
+                } catch {
+                    return window.Store || {};
+                }
+            },
+            widStr(w) {
+                if (!w) return '';
+                if (typeof w === 'string') return w;
+                if (typeof w._serialized === 'string') return w._serialized;
+                if (typeof w.$1 === 'string') return w.$1;
+                if (w.user && w.server) return `${w.user}@${w.server}`;
+                return String(w);
+            },
+            resolveName(jidStr, chatObj, fallbackNotify) {
+                const cols = this.getCols();
+                const userPart = String(jidStr || '').split('@')[0].split(':')[0];
+
+                if (chatObj) {
+                    const cName = chatObj.contact?.name || chatObj.contact?.pushname || chatObj.contact?.verifiedName || chatObj.formattedTitle || chatObj.name;
+                    if (cName && !cName.includes('@') && cName !== userPart) return cName;
+                }
+
+                // Cek di koleksi Contact (termasuk pencocokan LID)
+                const contacts = cols.Contact?.getModelsArray ? cols.Contact.getModelsArray() : (cols.Contact?.models || []);
+                for (const ct of contacts) {
+                    const ctId = this.widStr(ct.id);
+                    const ctLid = this.widStr(ct.lid);
+                    const ctPn = this.widStr(ct.phoneNumber);
+                    if (ctId === jidStr || ctLid === jidStr || ctPn === jidStr || ctId.includes(userPart)) {
+                        const n = ct.name || ct.pushname || ct.verifiedName || ct.formattedName || ct.shortName;
+                        if (n && n !== userPart) return n;
+                    }
+                }
+
+                if (fallbackNotify) return fallbackNotify;
+                if (chatObj && (chatObj.formattedTitle || chatObj.name)) return chatObj.formattedTitle || chatObj.name;
+                return `+${userPart}`;
+            },
+            getCachedPic(jidStr) {
+                try {
+                    const cols = this.getCols();
+                    const picCol = cols.ProfilePicThumb || window.Store?.ProfilePicThumb;
+                    if (!picCol) return null;
+                    const userPart = String(jidStr || '').split('@')[0].split(':')[0];
+                    const arr = picCol.getModelsArray ? picCol.getModelsArray() : (picCol.models || []);
+                    for (const m of arr) {
+                        const mId = this.widStr(m.id);
+                        if (mId === jidStr || (userPart && mId.includes(userPart))) {
+                            if (m.eurl || m.imgFull || m.img) return m.eurl || m.imgFull || m.img;
+                        }
+                    }
+                } catch {}
+                return null;
+            }
+        };
+
         if (typeof window.onCodeReceivedEvent !== 'function') {
             window.onCodeReceivedEvent = (code) => code;
         }
 
-        // 3. Patch Status Gating
         try {
             const gatingMod = window.require('WAWebStatusGatingUtils');
             if (gatingMod && typeof gatingMod.canCheckStatusRankingPosterGating !== 'function') {
@@ -248,27 +318,10 @@ async function injectWhatsAppPatches() {
             }
         } catch (e) {}
 
-        // 4. Patch sendSeen
         if (window.WWebJS && window.WWebJS.sendSeen) {
             const origSendSeen = window.WWebJS.sendSeen;
             window.WWebJS.sendSeen = async (chatId) => {
-                try {
-                    return await origSendSeen(chatId);
-                } catch (e) {
-                    return true;
-                }
-            };
-        }
-
-        // 5. Patch getMessageModel agar selalu menyertakan id._serialized
-        if (window.WWebJS && window.WWebJS.getMessageModel) {
-            const origGetMsg = window.WWebJS.getMessageModel;
-            window.WWebJS.getMessageModel = (message) => {
-                const res = origGetMsg(message);
-                if (res && res.id && !res.id._serialized) {
-                    res.id._serialized = res.id.$1 || message?.id?._serialized || message?.id?.$1;
-                }
-                return res;
+                try { return await origSendSeen(chatId); } catch { return true; }
             };
         }
     });
@@ -278,26 +331,21 @@ async function getRealProfilePic(jid) {
     if (!isReady || !jid) return null;
     const url = await safeEvaluate(async (targetId) => {
         try {
-            const Store = window.Store;
-            if (!Store || !Store.ProfilePicThumb) return null;
+            if (!window.__IGLASS__) return null;
+            const cached = window.__IGLASS__.getCachedPic(targetId);
+            if (cached) return cached;
 
-            const userNum = String(targetId).split('@')[0].split(':')[0];
-            const models = Store.ProfilePicThumb.getModelsArray ? Store.ProfilePicThumb.getModelsArray() : (Store.ProfilePicThumb.models || []);
-
-            for (const m of models) {
-                const mId = m.id?._serialized || m.id?.$1 || m.id?.user || String(m.id || '');
-                if (mId === targetId || mId.includes(userNum)) {
-                    if (m.eurl || m.imgFull || m.img) return m.eurl || m.imgFull || m.img;
+            const cols = window.__IGLASS__.getCols();
+            const picCol = cols.ProfilePicThumb || window.Store?.ProfilePicThumb;
+            const WidFactory = window.Store?.WidFactory || window.require('WAWebWidFactory');
+            if (picCol && WidFactory) {
+                const wid = WidFactory.createWid(targetId);
+                const found = await picCol.find(wid).catch(() => null);
+                if (found && (found.eurl || found.imgFull || found.img)) {
+                    return found.eurl || found.imgFull || found.img;
                 }
             }
-
-            const wid = Store.WidFactory.createWid(targetId);
-            await Store.ProfilePicThumb.find(wid).catch(() => {});
-            const found = Store.ProfilePicThumb.get(wid) || Store.ProfilePicThumb.get(targetId);
-            if (found && (found.eurl || found.imgFull || found.img)) {
-                return found.eurl || found.imgFull || found.img;
-            }
-            return null;
+            return window.__IGLASS__.getCachedPic(targetId);
         } catch {
             return null;
         }
@@ -310,14 +358,12 @@ async function getRealAbout(jid) {
     if (!isReady || !jid) return '';
     const about = await safeEvaluate(async (targetId) => {
         try {
-            const Store = window.Store;
-            const wid = Store.WidFactory.createWid(targetId);
-            if (Store.StatusUtils && Store.StatusUtils.getStatus) {
-                const res = await Store.StatusUtils.getStatus(wid).catch(() => null);
+            const WidFactory = window.Store?.WidFactory || window.require('WAWebWidFactory');
+            const wid = WidFactory.createWid(targetId);
+            if (window.Store?.StatusUtils?.getStatus) {
+                const res = await window.Store.StatusUtils.getStatus(wid).catch(() => null);
                 if (res && res.status) return res.status;
             }
-            const contact = Store.Contact.get(wid);
-            if (contact && contact.statusMute) return contact.statusMute;
             return '';
         } catch {
             return '';
@@ -328,7 +374,7 @@ async function getRealAbout(jid) {
 }
 
 // ============================================================================
-// 4. EVENT UTAMA WHATSAPP CLIENT (QR & KODE 8 DIGIT NOMOR HP)
+// 4. EVENT UTAMA WHATSAPP CLIENT
 // ============================================================================
 client.on('qr', async (qr) => {
     await injectWhatsAppPatches();
@@ -339,7 +385,7 @@ client.on('qr', async (qr) => {
 
 client.on('authenticated', () => {
     console.log('[WA] Autentikasi berhasil!');
-    io.emit('auth_status', 'Autentikasi berhasil! Mengimpor seluruh riwayat chat...');
+    io.emit('auth_status', 'Autentikasi berhasil! Mengimpor seluruh riwayat chat & status...');
 });
 
 client.on('ready', async () => {
@@ -352,16 +398,22 @@ client.on('ready', async () => {
     const profile = await getFullProfile();
     io.emit('ready', profile);
 
-    // Kirim daftar chat langsung & ulangi beberapa detik kemudian saat sinkronisasi riwayat selesai
     await sendRealChats();
-    setTimeout(() => sendRealChats().catch(() => {}), 4000);
-    setTimeout(() => sendRealChats().catch(() => {}), 9000);
-
     await syncRealStatuses();
     sendExportedFiles();
+
+    // Sinkronisasi bertahap saat WA Web selesai memuat riwayat dari HP
+    setTimeout(async () => {
+        await sendRealChats();
+        await syncRealStatuses();
+    }, 3500);
+
+    setTimeout(async () => {
+        await sendRealChats();
+        await syncRealStatuses();
+    }, 8000);
 });
 
-// Handler Pesan Baru Tanpa Memanggil msg.getChat() (Bebas Error "r")
 client.on('message_create', async (msg) => {
     try {
         await injectWhatsAppPatches();
@@ -377,11 +429,14 @@ client.on('message_create', async (msg) => {
         const chatId = msg.fromMe ? rawTo : rawFrom;
         if (!chatId) return;
 
-        // Ambil nama chat langsung dari Store.Chat tanpa msg.getChat()
-        const chatName = await safeEvaluate((cId) => {
-            const c = window.Store?.Chat?.get(cId);
-            return c ? (c.formattedTitle || c.name || c.contact?.name || c.contact?.pushname || cId.split('@')[0]) : cId.split('@')[0];
-        }, chatId) || chatId.split('@')[0];
+        const notifyName = msg._data?.notifyName || '';
+        const chatName = await safeEvaluate((cId, notify) => {
+            if (!window.__IGLASS__) return notify || cId.split('@')[0];
+            const cols = window.__IGLASS__.getCols();
+            const chats = cols.Chat?.getModelsArray ? cols.Chat.getModelsArray() : [];
+            const chatObj = chats.find(c => window.__IGLASS__.widStr(c.id) === cId);
+            return window.__IGLASS__.resolveName(cId, chatObj, notify);
+        }, chatId, notifyName) || notifyName || chatId.split('@')[0];
 
         const savedMedia = await processAutoExportDirect(msg, chatId, chatName);
         const msgIdStr = msg.id?._serialized || msg.id?.$1 || `${msg.fromMe}_${chatId}_${msg.id?.id || Date.now()}`;
@@ -411,9 +466,7 @@ client.on('message_create', async (msg) => {
         });
 
         await sendRealChats();
-    } catch (err) {
-        // Jangan biarkan error pesan menggagalkan proses
-    }
+    } catch (err) {}
 });
 
 client.on('call', async (call) => {
@@ -454,67 +507,84 @@ async function getFullProfile() {
 }
 
 // ============================================================================
-// AMBIL SEMUA DAFTAR CHAT (TERMASUK CHAT LAMA SEBELUM TERTAUT)
+// 5. AMBIL SEMUA DAFTAR CHAT & RIWAYAT CHAT (DENGAN ISOLASI TRY/CATCH PER CHAT)
 // ============================================================================
 async function sendRealChats() {
     if (!isReady) return;
+    await injectWhatsAppPatches();
+
     try {
         const rawChats = await safeEvaluate(() => {
+            const results = [];
+            const seenIds = new Set();
+
             try {
-                const Store = window.Store;
-                if (!Store || !Store.Chat) return [];
+                const H = window.__IGLASS__;
+                const cols = H.getCols();
+                const chatModels = cols.Chat?.getModelsArray ? cols.Chat.getModelsArray() : (cols.Chat?.models || []);
+                const msgModels = cols.Msg?.getModelsArray ? cols.Msg.getModelsArray() : (cols.Msg?.models || []);
 
-                const chats = Store.Chat.getModelsArray();
-                const thumbModels = Store.ProfilePicThumb?.getModelsArray ? Store.ProfilePicThumb.getModelsArray() : [];
+                // 1. Ambil semua chat dari koleksi Chat (tiap item dibungkus try/catch sendiri agar anti gagal!)
+                for (const c of chatModels) {
+                    try {
+                        const chatId = H.widStr(c.id);
+                        if (!chatId || chatId === 'status@broadcast') continue;
 
-                return chats
-                    .filter(c => {
-                        const cid = c.id?._serialized || c.id?.$1 || '';
-                        return cid && cid !== 'status@broadcast';
-                    })
-                    .sort((a, b) => (b.pin ? 1 : 0) - (a.pin ? 1 : 0) || (b.t || 0) - (a.t || 0))
-                    .slice(0, 120)
-                    .map(c => {
-                        const chatId = c.id?._serialized || c.id?.$1 || `${c.id.user}@${c.id.server}`;
-                        const userNum = c.id?.user || chatId.split('@')[0];
-                        const msgsArr = c.msgs?.getModelsArray ? c.msgs.getModelsArray() : [];
+                        const msgsArr = c.msgs?.getModelsArray ? c.msgs.getModelsArray() : (c.msgs?.models || []);
                         const lastMsg = msgsArr.length > 0 ? msgsArr[msgsArr.length - 1] : null;
-                        const name = c.formattedTitle || c.name || c.contact?.name || c.contact?.pushname || userNum;
+                        const notify = lastMsg?.notifyName || lastMsg?._data?.notifyName || '';
+                        const name = H.resolveName(chatId, c, notify);
+                        const picUrl = H.getCachedPic(chatId);
 
-                        let picUrl = null;
-                        const directThumb = Store.ProfilePicThumb.get(c.id) || Store.ProfilePicThumb.get(chatId);
-                        if (directThumb && (directThumb.eurl || directThumb.imgFull || directThumb.img)) {
-                            picUrl = directThumb.eurl || directThumb.imgFull || directThumb.img;
-                        } else {
-                            for (const m of thumbModels) {
-                                const mId = m.id?._serialized || m.id?.$1 || String(m.id || '');
-                                if (mId === chatId || mId.includes(userNum)) {
-                                    if (m.eurl || m.imgFull || m.img) {
-                                        picUrl = m.eurl || m.imgFull || m.img;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        return {
+                        seenIds.add(chatId);
+                        results.push({
                             id: chatId,
-                            user: userNum,
+                            user: String(chatId).split('@')[0],
                             name: name,
                             picUrl: picUrl,
-                            isGroup: Boolean(c.isGroup),
+                            isGroup: chatId.endsWith('@g.us') || Boolean(c.isGroup),
                             pinned: Boolean(c.pin),
-                            unreadCount: c.unreadCount || 0,
-                            timestamp: c.t || (lastMsg ? lastMsg.t : 0) || 0,
-                            lastBody: lastMsg ? (lastMsg.body || lastMsg.caption || '') : '',
-                            lastType: lastMsg ? (lastMsg.type || 'chat') : 'chat',
+                            unreadCount: Number(c.unreadCount || 0),
+                            timestamp: Number(c.t || lastMsg?.t || 0),
+                            lastBody: lastMsg ? String(lastMsg.body || lastMsg.caption || '') : '',
+                            lastType: lastMsg ? String(lastMsg.type || 'chat') : 'chat',
                             lastFromMe: lastMsg ? Boolean(lastMsg.id?.fromMe) : false,
-                            lastDuration: lastMsg ? (lastMsg.duration || 0) : 0
-                        };
-                    });
-            } catch (e) {
-                return [];
-            }
+                            lastDuration: lastMsg ? Number(lastMsg.duration || 0) : 0
+                        });
+                    } catch (innerErr) {}
+                }
+
+                // 2. Fallback: Jika ada pesan di koleksi Msg yang chat-nya belum masuk daftar, tambahkan otomatis!
+                for (let i = msgModels.length - 1; i >= 0; i--) {
+                    try {
+                        const m = msgModels[i];
+                        if (!m || m.isStatusV3) continue;
+                        const remId = H.widStr(m.id?.remote || m.from);
+                        if (!remId || remId === 'status@broadcast' || seenIds.has(remId)) continue;
+
+                        seenIds.add(remId);
+                        const name = H.resolveName(remId, null, m.notifyName || m._data?.notifyName);
+                        results.push({
+                            id: remId,
+                            user: String(remId).split('@')[0],
+                            name: name,
+                            picUrl: H.getCachedPic(remId),
+                            isGroup: remId.endsWith('@g.us'),
+                            pinned: false,
+                            unreadCount: 0,
+                            timestamp: Number(m.t || 0),
+                            lastBody: String(m.body || m.caption || ''),
+                            lastType: String(m.type || 'chat'),
+                            lastFromMe: Boolean(m.id?.fromMe),
+                            lastDuration: Number(m.duration || 0)
+                        });
+                    } catch {}
+                }
+            } catch (outerErr) {}
+
+            return results
+                .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.timestamp || 0) - (a.timestamp || 0))
+                .slice(0, 150);
         });
 
         if (!rawChats) return;
@@ -559,10 +629,12 @@ async function sendRealChats() {
             };
         });
 
+        console.log(`[Sync] Berhasil memuat ${chatList.length} daftar obrolan ke UI.`);
         io.emit('chats', chatList);
 
+        // Muat foto profil yang belum ter-cache di background
         setTimeout(async () => {
-            for (let i = 0; i < Math.min(15, chatList.length); i++) {
+            for (let i = 0; i < Math.min(18, chatList.length); i++) {
                 if (!chatList[i].picUrl) {
                     const url = await getRealProfilePic(chatList[i].id);
                     if (url) {
@@ -570,74 +642,105 @@ async function sendRealChats() {
                     }
                 }
             }
-        }, 1200);
+        }, 1000);
     } catch (err) {
         console.error('[Error sendRealChats]:', err.message);
     }
 }
 
 // ============================================================================
-// BUKA CHAT & TARIK RIWAYAT PESAN LAMA LANGSUNG DARI STORE.CHAT (ANTI ERROR "r")
+// 6. BUKA CHAT & TARIK RIWAYAT PESAN LAMA DARI HP/SERVER (ON-DEMAND SYNC)
 // ============================================================================
 async function loadChatMessagesDirect(chatId, loadOlder = false) {
     if (!isReady || !chatId) return null;
+    await injectWhatsAppPatches();
 
     const result = await safeEvaluate(async (targetChatId, fetchOlder) => {
         try {
-            const Store = window.Store;
-            let chat = Store.Chat.get(targetChatId);
-            if (!chat) {
-                const wid = Store.WidFactory.createWid(targetChatId);
-                chat = await Store.Chat.find(wid).catch(() => null);
-            }
-            if (!chat) return null;
+            const H = window.__IGLASS__;
+            const cols = H.getCols();
+            const chatModels = cols.Chat?.getModelsArray ? cols.Chat.getModelsArray() : (cols.Chat?.models || []);
+            let chat = chatModels.find(c => H.widStr(c.id) === targetChatId);
 
-            // Tarik riwayat pesan lama dari server/HP (Import History sebelum perangkat tertaut)
-            const currentCount = chat.msgs ? chat.msgs.length : 0;
-            if (fetchOlder || currentCount < 25) {
-                try {
-                    if (Store.ConversationMsgs && Store.ConversationMsgs.loadEarlierMsgs) {
-                        await Store.ConversationMsgs.loadEarlierMsgs(chat).catch(() => {});
-                        if (fetchOlder) {
-                            await Store.ConversationMsgs.loadEarlierMsgs(chat).catch(() => {});
+            if (!chat && cols.Chat?.find) {
+                const WidFactory = window.Store?.WidFactory || window.require('WAWebWidFactory');
+                const wid = WidFactory.createWid(targetChatId);
+                chat = await cols.Chat.find(wid).catch(() => null);
+            }
+
+            // 1. Trigger On-Demand History Sync dari HP Utama & LoadEarlierMsgs
+            if (chat) {
+                const currentCount = chat.msgs?.getModelsArray ? chat.msgs.getModelsArray().length : 0;
+                if (fetchOlder || currentCount < 25) {
+                    try {
+                        const peerReq = window.require('WAWebSendNonMessageDataRequest');
+                        if (peerReq && peerReq.sendPeerDataOperationRequest) {
+                            await peerReq.sendPeerDataOperationRequest(3, { chatId: chat.id }).catch(() => {});
                         }
-                    } else if (chat.msgs && chat.msgs.loadEarlierMsgs) {
-                        await chat.msgs.loadEarlierMsgs().catch(() => {});
-                    }
-                } catch (e) {}
+                    } catch {}
+
+                    try {
+                        const convMsgs = window.Store?.ConversationMsgs || window.require('WAWebChatLoadMessages');
+                        if (convMsgs && convMsgs.loadEarlierMsgs) {
+                            await convMsgs.loadEarlierMsgs(chat).catch(() => {});
+                            if (fetchOlder) await convMsgs.loadEarlierMsgs(chat).catch(() => {});
+                        } else if (chat.msgs?.loadEarlierMsgs) {
+                            await chat.msgs.loadEarlierMsgs().catch(() => {});
+                        }
+                    } catch {}
+                }
             }
 
-            const name = chat.formattedTitle || chat.name || chat.contact?.name || chat.contact?.pushname || targetChatId.split('@')[0];
-            const rawMsgs = chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : [];
-            const sliceMsgs = rawMsgs.slice(-60);
+            // 2. Kumpulkan semua pesan milik chatId ini (baik dari chat.msgs maupun dari koleksi global Msg)
+            const msgMap = new Map();
+            const addMsgToMap = (m) => {
+                if (!m || m.isStatusV3 || m.type === 'gp2' || m.type === 'e2e_notification' || m.type === 'notification_template') return;
+                const mId = H.widStr(m.id) || `${Boolean(m.id?.fromMe)}_${targetChatId}_${m.t || Date.now()}`;
+                if (msgMap.has(mId)) return;
 
-            const messages = sliceMsgs
-                .filter(m => m && m.type !== 'gp2' && m.type !== 'e2e_notification' && m.type !== 'notification_template')
-                .map(m => {
-                    const msgId = m.id?._serialized || m.id?.$1 || `${Boolean(m.id?.fromMe)}_${targetChatId}_${m.id?.id}`;
-                    const ts = m.t || Math.floor(Date.now() / 1000);
-                    const dur = m.duration || 0;
-                    const hasMedia = Boolean(m.type === 'image' || m.type === 'video' || m.type === 'ptt' || m.type === 'audio' || m.type === 'document' || m.type === 'sticker' || m.mediaObject);
+                const hasMedia = Boolean(
+                    m.type === 'image' || m.type === 'video' || m.type === 'ptt' ||
+                    m.type === 'audio' || m.type === 'document' || m.type === 'sticker' || m.mediaObject
+                );
 
-                    return {
-                        id: msgId,
-                        body: m.body || m.caption || '',
-                        fromMe: Boolean(m.id?.fromMe),
-                        timestamp: ts,
-                        type: m.type || 'chat',
-                        hasMedia: hasMedia,
-                        mimetype: m.mimetype || null,
-                        fileName: m.filename || 'File',
-                        sizeBytes: m.size || 0,
-                        durationSec: dur
-                    };
+                msgMap.set(mId, {
+                    id: mId,
+                    body: String(m.body || m.caption || ''),
+                    fromMe: Boolean(m.id?.fromMe),
+                    timestamp: Number(m.t || Math.floor(Date.now() / 1000)),
+                    type: String(m.type || 'chat'),
+                    hasMedia: hasMedia,
+                    mimetype: m.mimetype || null,
+                    fileName: m.filename || 'File',
+                    sizeBytes: Number(m.size || 0),
+                    durationSec: Number(m.duration || 0),
+                    notifyName: m.notifyName || m._data?.notifyName || ''
                 });
+            };
+
+            if (chat && chat.msgs) {
+                const cMsgs = chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : (chat.msgs.models || []);
+                cMsgs.forEach(addMsgToMap);
+            }
+
+            const allMsgs = cols.Msg?.getModelsArray ? cols.Msg.getModelsArray() : (cols.Msg?.models || []);
+            allMsgs.forEach(m => {
+                const rem = H.widStr(m?.id?.remote || m?.from);
+                if (rem === targetChatId) addMsgToMap(m);
+            });
+
+            const sortedMsgs = Array.from(msgMap.values())
+                .sort((a, b) => a.timestamp - b.timestamp)
+                .slice(-80);
+
+            const lastNotify = sortedMsgs.find(x => !x.fromMe && x.notifyName)?.notifyName || '';
+            const name = H.resolveName(targetChatId, chat, lastNotify);
 
             return {
                 chatId: targetChatId,
                 name: name,
-                isGroup: Boolean(chat.isGroup),
-                messages: messages
+                isGroup: targetChatId.endsWith('@g.us') || Boolean(chat?.isGroup),
+                messages: sortedMsgs
             };
         } catch (err) {
             return null;
@@ -660,7 +763,6 @@ async function loadChatMessagesDirect(chatId, loadOlder = false) {
         let mediaUrl = null;
         let fileSize = formatBytes(m.sizeBytes);
 
-        // Jika pesan punya media di 12 pesan terakhir, download otomatis agar tampil di layar
         if (m.hasMedia && i >= result.messages.length - 12) {
             const downloaded = await downloadMediaByMsgId(m.id, safeChatName, m.timestamp);
             if (downloaded) {
@@ -670,7 +772,6 @@ async function loadChatMessagesDirect(chatId, loadOlder = false) {
             }
         }
 
-        // Simpan ke log chat (.txt)
         if (config.autoExportChat) {
             saveMessageLineToTxt(safeChatName, m.timestamp, m.fromMe ? 'Saya' : result.name, m.body || (m.hasMedia ? `[MEDIA: ${m.type}]` : ''));
         }
@@ -718,10 +819,8 @@ function saveMessageLineToTxt(safeChatName, timestamp, sender, text) {
     } catch {}
 }
 
-// Download Media Langsung Berdasarkan ID Pesan di Store.Msg
 async function downloadMediaByMsgId(msgId, safeChatName, timestamp) {
     try {
-        // Cek apakah file sudah pernah di-download
         const shortId = String(msgId).slice(-8).replace(/[^a-zA-Z0-9]/g, '');
         const existingFiles = fs.readdirSync(MEDIA_DIR);
         const matchFile = existingFiles.find(f => f.includes(`_${timestamp}_${shortId}`));
@@ -736,8 +835,6 @@ async function downloadMediaByMsgId(msgId, safeChatName, timestamp) {
 
         const mediaData = await safeEvaluate(async (targetMsgId) => {
             try {
-                const msg = window.Store.Msg.get(targetMsgId);
-                if (!msg) return null;
                 if (window.WWebJS && window.WWebJS.downloadMedia) {
                     return await window.WWebJS.downloadMedia(targetMsgId).catch(() => null);
                 }
@@ -788,10 +885,17 @@ async function processAutoExportDirect(msg, chatId, chatName) {
     return null;
 }
 
+// ============================================================================
+// 7. SINKRONISASI PENUH STATUS & RIWAYAT STATUS (StatusV3 + Msg Store)
+// ============================================================================
 async function handleIncomingStatus(msg) {
     try {
         const authorId = msg.author || msg.from;
-        let authorName = msg._data?.notifyName || String(authorId).split('@')[0];
+        const notify = msg._data?.notifyName || '';
+        const authorName = await safeEvaluate((aId, n) => {
+            return window.__IGLASS__ ? window.__IGLASS__.resolveName(aId, null, n) : (n || aId.split('@')[0]);
+        }, authorId, notify) || notify || String(authorId).split('@')[0];
+
         const picUrl = await getRealProfilePic(authorId);
         const msgId = msg.id?._serialized || msg.id?.$1 || 'st_' + Date.now();
         const ts = msg.timestamp || Math.floor(Date.now() / 1000);
@@ -814,7 +918,7 @@ async function handleIncomingStatus(msg) {
             picUrl: picUrl,
             fromMe: msg.fromMe,
             type: msg.type,
-            body: msg.body || '',
+            body: msg.body || msg._data?.caption || '',
             mediaUrl: mediaUrl,
             mimetype: mimetype,
             color: '#059669',
@@ -822,57 +926,126 @@ async function handleIncomingStatus(msg) {
             timestamp: ts
         };
 
-        statusStore = [statusItem, ...statusStore.filter(s => s.id !== statusItem.id)].slice(0, 50);
+        statusStore = [statusItem, ...statusStore.filter(s => s.id !== statusItem.id)].slice(0, 80);
         io.emit('statuses', statusStore);
     } catch (e) {}
 }
 
 async function syncRealStatuses() {
     if (!isReady) return;
+    await injectWhatsAppPatches();
+
     try {
-        const rawStatuses = await safeEvaluate(() => {
+        const rawStatuses = await safeEvaluate(async () => {
             const list = [];
+            const seenMsgIds = new Set();
+
             try {
-                const msgs = window.Store.Msg.getModelsArray().filter(m =>
-                    m.isStatusV3 || (m.id?.remote?._serialized || m.id?.remote?.$1) === 'status@broadcast'
-                );
-                for (const m of msgs.slice(-25)) {
-                    const authorId = m.author?._serialized || m.author?.$1 || m.author || '';
-                    const contact = authorId ? window.Store.Contact.get(authorId) : null;
-                    const name = contact?.name || contact?.pushname || m.notifyName || String(authorId).split('@')[0] || 'Kontak';
-                    list.push({
-                        id: m.id?._serialized || m.id?.$1 || String(Date.now()),
-                        authorId: authorId,
-                        authorName: name,
-                        fromMe: Boolean(m.id?.fromMe),
-                        type: m.type || 'chat',
-                        body: m.body || m.caption || '',
-                        timestamp: m.t || Math.floor(Date.now() / 1000)
-                    });
+                const H = window.__IGLASS__;
+                const cols = H.getCols();
+
+                // 1. Tarik dari koleksi StatusV3 (Semua Status & Riwayat Status Kontak)
+                const statusCol = cols.StatusV3 || window.Store?.StatusV3;
+                const statusModels = statusCol?.getModelsArray ? statusCol.getModelsArray() : (statusCol?.models || []);
+
+                for (const st of statusModels) {
+                    try {
+                        if (st.loadMore) await st.loadMore().catch(() => {});
+                        const authorId = H.widStr(st.id);
+                        const authorName = H.resolveName(authorId, st, st.contact?.name || st.contact?.pushname);
+                        const picUrl = H.getCachedPic(authorId);
+
+                        const sMsgs = st.msgs?.getModelsArray ? st.msgs.getModelsArray() : (st.msgs?.models || []);
+                        for (const m of sMsgs) {
+                            const mId = H.widStr(m.id) || `st_${authorId}_${m.t}`;
+                            if (seenMsgIds.has(mId)) continue;
+                            seenMsgIds.add(mId);
+
+                            list.push({
+                                id: mId,
+                                authorId: authorId,
+                                authorName: authorName,
+                                picUrl: picUrl,
+                                fromMe: Boolean(m.id?.fromMe || st.isMe),
+                                type: String(m.type || 'chat'),
+                                body: String(m.body || m.caption || ''),
+                                hasMedia: Boolean(m.type === 'image' || m.type === 'video' || m.mediaObject),
+                                timestamp: Number(m.t || st.t || Math.floor(Date.now() / 1000))
+                            });
+                        }
+                    } catch {}
+                }
+
+                // 2. Tarik juga dari koleksi Msg yang berlabel status@broadcast / isStatusV3
+                const msgModels = cols.Msg?.getModelsArray ? cols.Msg.getModelsArray() : (cols.Msg?.models || []);
+                for (const m of msgModels) {
+                    try {
+                        const rem = H.widStr(m.id?.remote);
+                        if (!m.isStatusV3 && rem !== 'status@broadcast') continue;
+
+                        const mId = H.widStr(m.id);
+                        if (!mId || seenMsgIds.has(mId)) continue;
+                        seenMsgIds.add(mId);
+
+                        const authorId = H.widStr(m.author || m.from);
+                        const authorName = H.resolveName(authorId, null, m.notifyName || m._data?.notifyName);
+
+                        list.push({
+                            id: mId,
+                            authorId: authorId,
+                            authorName: authorName,
+                            picUrl: H.getCachedPic(authorId),
+                            fromMe: Boolean(m.id?.fromMe),
+                            type: String(m.type || 'chat'),
+                            body: String(m.body || m.caption || ''),
+                            hasMedia: Boolean(m.type === 'image' || m.type === 'video' || m.mediaObject),
+                            timestamp: Number(m.t || Math.floor(Date.now() / 1000))
+                        });
+                    } catch {}
                 }
             } catch (e) {}
-            return list;
+
+            return list.sort((a, b) => b.timestamp - a.timestamp).slice(0, 60);
         });
 
         if (!rawStatuses) return;
 
         for (const s of rawStatuses) {
-            if (!statusStore.find(x => x.id === s.id)) {
-                const picUrl = await getRealProfilePic(s.authorId);
+            const existing = statusStore.find(x => x.id === s.id);
+            if (!existing) {
+                let mediaUrl = null;
+                let mimetype = null;
+                if (s.hasMedia) {
+                    const dl = await downloadMediaByMsgId(s.id, 'Status_Story', s.timestamp);
+                    if (dl) {
+                        mediaUrl = dl.url;
+                        mimetype = dl.mimetype;
+                    }
+                }
                 statusStore.push({
-                    ...s,
+                    id: s.id,
+                    authorId: s.authorId,
+                    authorName: s.fromMe ? `Status Saya (${s.authorName})` : s.authorName,
                     initials: getInitials(s.authorName),
-                    picUrl: picUrl,
-                    mediaUrl: null,
-                    mimetype: null,
-                    color: '#0d9488',
-                    time: new Date(s.timestamp * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+                    picUrl: s.picUrl,
+                    fromMe: s.fromMe,
+                    type: s.type,
+                    body: s.body || (s.type === 'image' ? '📷 Foto Status' : s.type === 'video' ? '🎥 Video Status' : ''),
+                    mediaUrl: mediaUrl,
+                    mimetype: mimetype,
+                    color: '#059669',
+                    time: new Date(s.timestamp * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+                    timestamp: s.timestamp
                 });
             }
         }
+
         statusStore.sort((a, b) => b.timestamp - a.timestamp);
+        console.log(`[Sync] Berhasil memuat ${statusStore.length} status/story ke UI.`);
         io.emit('statuses', statusStore);
-    } catch (err) {}
+    } catch (err) {
+        console.error('[Error syncRealStatuses]:', err.message);
+    }
 }
 
 async function postStatusTextBypass(text, hexColor = '#059669') {
@@ -915,7 +1088,7 @@ function sendExportedFiles() {
 }
 
 // ============================================================================
-// 5. SOCKET.IO REAL-TIME HANDLERS
+// 8. SOCKET.IO REAL-TIME HANDLERS
 // ============================================================================
 io.on('connection', async (socket) => {
     socket.emit('config', config);
@@ -927,11 +1100,11 @@ io.on('connection', async (socket) => {
         const profile = await getFullProfile();
         socket.emit('ready', profile);
         await sendRealChats();
+        await syncRealStatuses();
     } else if (currentQr) {
         socket.emit('qr', currentQr);
     }
 
-    // Request Kode Tautan 8 Digit via Nomor HP (Sudah Di-Fix window.onCodeReceivedEvent)
     socket.on('request_pairing_code', async (phoneNumber) => {
         try {
             let cleanNum = String(phoneNumber || '').replace(/[^0-9]/g, '');
@@ -947,12 +1120,10 @@ io.on('connection', async (socket) => {
             console.log(`\n🔑 [KODE LOGIN 8 DIGIT] Nomor: ${cleanNum} ===> ${formattedCode}\n`);
             socket.emit('pairing_code', formattedCode);
         } catch (err) {
-            console.error('[Pairing Code Error]:', err.message);
             socket.emit('notify', { title: 'Gagal Meminta Kode', message: 'Tunggu beberapa detik hingga halaman WA siap, lalu klik lagi.' });
         }
     });
 
-    // Buka Chat & Tarik Pesan Lama (Bebas Error "r")
     socket.on('open_chat', async (chatId) => {
         if (!isReady) return;
         const data = await loadChatMessagesDirect(chatId, false);
@@ -961,7 +1132,6 @@ io.on('connection', async (socket) => {
         }
     });
 
-    // Muat Lebih Banyak Pesan Lama di Dalam Ruang Chat
     socket.on('load_older_messages', async (chatId) => {
         if (!isReady || !chatId) return;
         socket.emit('notify', { title: 'Memuat Riwayat Lama...', message: 'Menarik pesan terdahulu dari WhatsApp...' });
@@ -972,17 +1142,19 @@ io.on('connection', async (socket) => {
         }
     });
 
-    // Tombol Import & Sinkronkan Semua Riwayat Chat Lama
     socket.on('import_all_history', async () => {
         if (!isReady) return;
-        socket.emit('notify', { title: 'Mengimpor Semua Chat...', message: 'Menarik daftar & pesan lama dari seluruh obrolan...' });
+        socket.emit('notify', { title: 'Mengimpor Semua Chat & Status...', message: 'Menarik daftar obrolan, pesan lama & status...' });
         await sendRealChats();
+        await syncRealStatuses();
 
         const chatIds = await safeEvaluate(() => {
-            return window.Store.Chat.getModelsArray()
-                .filter(c => (c.id?._serialized || c.id?.$1) !== 'status@broadcast')
-                .slice(0, 20)
-                .map(c => c.id?._serialized || c.id?.$1);
+            const cols = window.__IGLASS__?.getCols() || {};
+            const arr = cols.Chat?.getModelsArray ? cols.Chat.getModelsArray() : [];
+            return arr
+                .map(c => window.__IGLASS__.widStr(c.id))
+                .filter(id => id && id !== 'status@broadcast')
+                .slice(0, 20);
         });
 
         if (chatIds && chatIds.length > 0) {
@@ -992,7 +1164,7 @@ io.on('connection', async (socket) => {
         }
         await sendRealChats();
         sendExportedFiles();
-        socket.emit('notify', { title: 'Import Selesai!', message: 'Seluruh chat & riwayat pesan lama berhasil diimpor!' });
+        socket.emit('notify', { title: 'Import Selesai!', message: 'Seluruh chat, riwayat pesan & status berhasil disinkronkan!' });
     });
 
     socket.on('send_text', async ({ chatId, text }) => {
@@ -1036,8 +1208,10 @@ io.on('connection', async (socket) => {
         if (!isReady) return;
         try {
             await safeEvaluate(async (mId, em) => {
-                const msg = window.Store.Msg.get(mId);
-                if (msg && window.Store.SendReactionToMsg) {
+                const cols = window.__IGLASS__?.getCols() || {};
+                const msgs = cols.Msg?.getModelsArray ? cols.Msg.getModelsArray() : [];
+                const msg = msgs.find(x => window.__IGLASS__.widStr(x.id) === mId);
+                if (msg && window.Store?.SendReactionToMsg) {
                     await window.Store.SendReactionToMsg(msg, em).catch(() => {});
                 }
             }, msgId, emoji);
@@ -1075,8 +1249,10 @@ io.on('connection', async (socket) => {
         if (!isReady || !authorId) return;
         try {
             await safeEvaluate(async (sId) => {
-                const msg = window.Store.Msg.get(sId);
-                if (msg && window.Store.SendReactionToMsg) {
+                const cols = window.__IGLASS__?.getCols() || {};
+                const msgs = cols.Msg?.getModelsArray ? cols.Msg.getModelsArray() : [];
+                const msg = msgs.find(x => window.__IGLASS__.widStr(x.id) === sId);
+                if (msg && window.Store?.SendReactionToMsg) {
                     await window.Store.SendReactionToMsg(msg, '❤️').catch(() => {});
                 }
             }, statusId);
@@ -1142,7 +1318,7 @@ io.on('connection', async (socket) => {
 client.initialize();
 
 // ============================================================================
-// 6. START SERVER & AUTO CLOUDFLARE TUNNEL
+// 9. START SERVER & AUTO CLOUDFLARE TUNNEL
 // ============================================================================
 server.listen(3000, () => {
     console.log('🚀 Server Lokal aktif di: http://localhost:3000');
@@ -1156,9 +1332,9 @@ server.listen(3000, () => {
         if (match && !publicTunnelUrl) {
             publicTunnelUrl = match[0];
             console.log('\n============================================================');
-            console.log('🔥 BUKA LINK INI LANGSUNG (TAMPILAN TERBARU TANPA DEPLOY VERCEL):');
+            console.log('🔥 BUKA LINK INI LANGSUNG (TAMPILAN TERBARU):');
             console.log(`👉 ${publicTunnelUrl}`);
-            console.log('\n🚀 ATAU BUKA LEWAT VERCEL (Jalankan "vercel --prod" dulu jika HTML diubah):');
+            console.log('\n🚀 ATAU BUKA LEWAT VERCEL:');
             console.log(`👉 https://wa-web-neon.vercel.app/?server=${publicTunnelUrl}`);
             console.log('============================================================\n');
         }
