@@ -125,7 +125,7 @@
                 </button>
             </div>
             <p class="text-xs text-gray-400 mb-4 leading-relaxed">
-                Jika halaman ini dibuka melalui <b>Vercel</b>, masukkan URL publik <b>Cloudflare Tunnel</b> dari terminal Linux kamu (contoh: <code class="text-emerald-400">https://xxxx.trycloudflare.com</code>). Kosongkan jika dibuka langsung dari localhost/tunnel.
+                Masukkan URL publik <b>Cloudflare Tunnel</b> dari terminal Linux/Termux kamu (contoh: <code class="text-emerald-400">https://xxxx.trycloudflare.com</code>).
             </p>
             <input id="backend-url-input" type="text" placeholder="https://xxxx.trycloudflare.com" class="w-full rounded-xl bg-[#151e31] border border-white/15 px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 mb-4">
             <div class="flex gap-2">
@@ -139,29 +139,41 @@
         </div>
     </div>
 
-    <!-- ==================== LAYAR SCAN QR (SAAT BELUM LOGIN) ==================== -->
-    <div id="qr-login-screen" class="fixed inset-0 z-40 bg-[#060913]/95 backdrop-blur-2xl flex items-center justify-center p-4">
-        <div class="iglass-container rounded-3xl max-w-md w-full p-8 flex flex-col items-center text-center">
-            <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/25 mb-4">
-                <i data-lucide="message-square" class="w-7 h-7 text-white"></i>
+    <!-- ==================== LAYAR SCAN QR & KODE 8 DIGIT NOMOR HP ==================== -->
+    <div id="qr-login-screen" class="fixed inset-0 z-40 bg-[#060913]/95 backdrop-blur-2xl flex items-center justify-center p-4 overflow-y-auto">
+        <div class="iglass-container rounded-3xl max-w-md w-full p-7 flex flex-col items-center text-center my-auto">
+            <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/25 mb-3">
+                <i data-lucide="message-square" class="w-6 h-6 text-white"></i>
             </div>
             <div class="flex items-center gap-1.5 text-xl font-bold mb-1">
                 <span>WhatsApp</span><span class="text-emerald-400">iGlass</span>
             </div>
-            <p class="text-xs text-gray-400 leading-relaxed mb-6">
-                Buka WhatsApp di HP kamu &rarr; <b>Perangkat Tertaut</b> &rarr; <b>Tautkan Perangkat</b> lalu scan QR Code di bawah ini.
+            <p class="text-xs text-gray-400 leading-relaxed mb-4">
+                Buka WhatsApp di HP &rarr; <b>Perangkat Tertaut</b> &rarr; <b>Tautkan Perangkat</b> lalu scan QR atau gunakan <b>Nomor HP (Kode 8 Digit)</b> di bawah.
             </p>
 
-            <div id="qr-box" class="w-60 h-60 rounded-2xl bg-white p-3.5 flex items-center justify-center shadow-2xl mb-5">
+            <!-- Kotak QR Code -->
+            <div id="qr-box" class="w-52 h-52 rounded-2xl bg-white p-3 flex items-center justify-center shadow-2xl mb-4">
                 <div class="flex flex-col items-center gap-3 text-gray-700">
                     <div class="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
                     <span id="qr-status-text" class="text-xs font-medium">Menyiapkan QR Code...</span>
                 </div>
             </div>
 
-            <div class="flex items-center gap-2 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-4 py-2 rounded-full mb-3">
-                <i data-lucide="shield-check" class="w-4 h-4"></i>
-                <span>Real-Time Sync, Status Story & Auto-Export Aktif</span>
+            <!-- Fitur Tautkan dengan Nomor Telepon (Kode 8 Digit) -->
+            <div class="w-full bg-white/[0.04] border border-white/10 rounded-2xl p-3.5 mb-3">
+                <div class="text-[11px] font-semibold text-emerald-400 mb-2">
+                    Atau Tautkan dengan Nomor Telepon (Tanpa Scan Kamera)
+                </div>
+                <div class="flex gap-2">
+                    <input id="pairing-phone-input" type="text" placeholder="Contoh: 08123456789" class="flex-1 rounded-xl bg-[#151e31] border border-white/15 px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500">
+                    <button onclick="requestPairingCode()" class="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold transition shrink-0">
+                        Minta Kode
+                    </button>
+                </div>
+                <div id="pairing-code-display" class="hidden mt-3 py-2 px-4 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-mono text-lg font-bold tracking-widest">
+                    ----
+                </div>
             </div>
 
             <button onclick="openServerModal()" class="text-[11px] text-gray-400 hover:text-emerald-400 underline flex items-center gap-1 mt-1">
@@ -290,7 +302,6 @@
                     </div>
 
                     <div id="room-active" class="hidden flex-1 flex flex-col overflow-hidden">
-                        <!-- Header Kontak (Klik Foto Profil untuk Zoom HD) -->
                         <div class="h-16 px-6 border-b border-white/[0.08] flex items-center justify-between shrink-0 bg-[#101829]/60">
                             <div class="flex items-center gap-3.5 min-w-0">
                                 <div onclick="zoomActiveChatPP()" class="relative shrink-0 cursor-zoom-in group" title="Klik untuk lihat Foto Profil penuh">
@@ -313,10 +324,8 @@
                             </div>
                         </div>
 
-                        <!-- Messages Container -->
                         <div id="messages-container" class="flex-1 overflow-y-auto px-7 py-5 space-y-5"></div>
 
-                        <!-- Emoji Popover -->
                         <div id="emoji-popover" class="hidden px-6 py-2.5 bg-[#121c30] border-t border-white/10 flex items-center gap-3 overflow-x-auto">
                             <button onclick="addEmojiToInput('👍')" class="text-lg hover:scale-125 transition">👍</button>
                             <button onclick="addEmojiToInput('❤️')" class="text-lg hover:scale-125 transition">❤️</button>
@@ -328,7 +337,6 @@
                             <button onclick="addEmojiToInput('😎')" class="text-lg hover:scale-125 transition">😎</button>
                         </div>
 
-                        <!-- Input Bar -->
                         <div class="px-6 py-3.5 border-t border-white/[0.08] bg-[#0e1627]/80 flex items-center gap-3 shrink-0">
                             <button onclick="document.getElementById('emoji-popover').classList.toggle('hidden')" class="p-2 text-gray-400 hover:text-white transition">
                                 <i data-lucide="smile" class="w-5 h-5"></i>
@@ -349,10 +357,8 @@
                 </section>
             </div>
 
-            <!-- ================= TAB 2: STATUS (STORY) WA REAL (LIHAT, UPLOAD & LIKE STATUS) ================= -->
+            <!-- ================= TAB 2: STATUS (STORY) WA REAL ================= -->
             <div id="view-status" class="hidden w-full h-full flex overflow-hidden">
-                
-                <!-- Sidebar Kiri: Daftar Status Teman & Tombol Buat Status -->
                 <aside class="w-[340px] sm:w-[370px] border-r border-white/[0.08] flex flex-col bg-[#0b101d]/50 shrink-0">
                     <div class="p-4 border-b border-white/[0.06] flex items-center justify-between">
                         <div>
@@ -369,10 +375,7 @@
                     </div>
                 </aside>
 
-                <!-- Area Kanan: Story Viewer (Lihat Status & Like ❤️) atau Form Buat Status -->
                 <section class="flex-1 flex flex-col bg-[#0d1424]/40 overflow-hidden relative">
-
-                    <!-- Mode 1: Form Buat Status Baru -->
                     <div id="status-create-pane" class="flex-1 flex flex-col items-center justify-center p-8">
                         <div class="iglass-bubble p-7 rounded-3xl max-w-lg w-full">
                             <h3 class="text-base font-bold mb-1 flex items-center gap-2">
@@ -400,7 +403,6 @@
                         </div>
                     </div>
 
-                    <!-- Mode 2: Story Player / Lihat Status Teman & Tombol Like ❤️ -->
                     <div id="status-viewer-pane" class="hidden flex-1 flex flex-col justify-between p-6 relative">
                         <div class="flex items-center justify-between bg-black/40 backdrop-blur-md p-3.5 rounded-2xl border border-white/10">
                             <div class="flex items-center gap-3">
@@ -435,7 +437,6 @@
                             </button>
                         </div>
                     </div>
-
                 </section>
             </div>
 
@@ -505,11 +506,10 @@
                 </div>
             </div>
 
-            <!-- ================= TAB 6: HALAMAN PROFIL WA ASLI (PP, NAMA, BIO, NOMOR) ================= -->
+            <!-- ================= TAB 6: HALAMAN PROFIL WA ASLI ================= -->
             <div id="view-profile" class="hidden w-full h-full p-6 overflow-y-auto flex items-center justify-center">
                 <div class="iglass-bubble p-8 rounded-3xl max-w-2xl w-full grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
                     
-                    <!-- Kolom Kiri: Foto Profil Besar & Info Akun -->
                     <div class="flex flex-col items-center text-center border-b md:border-b-0 md:border-r border-white/10 pb-6 md:pb-0 md:pr-6">
                         <div class="relative group mb-4">
                             <div onclick="zoomMyPP()" id="prof-page-avatar" class="w-36 h-36 rounded-full bg-emerald-600 flex items-center justify-center text-3xl font-bold overflow-hidden border-4 border-emerald-500/40 shadow-2xl cursor-zoom-in">
@@ -527,7 +527,6 @@
                         <span class="text-[11px] text-gray-400 mt-3">Klik foto untuk memperbesar • Klik ikon kamera untuk ganti PP</span>
                     </div>
 
-                    <!-- Kolom Kanan: Form Edit Nama & Bio WA -->
                     <div class="space-y-4">
                         <h4 class="text-sm font-bold flex items-center gap-2 text-emerald-400">
                             <i data-lucide="user-pen" class="w-4 h-4"></i>
@@ -665,6 +664,12 @@
             setTimeout(() => box.classList.add('hidden'), 3500);
         }
 
+        function requestPairingCode() {
+            const phone = document.getElementById('pairing-phone-input').value.trim();
+            if (!phone) return showToast('Masukkan Nomor HP', 'Ketik nomor WA kamu (contoh: 08123456789)');
+            socket.emit('request_pairing_code', phone);
+        }
+
         // ==================== LIGHTBOX ZOOM FOTO PROFIL ====================
         function openPPLightbox(url, name) {
             if (!url) {
@@ -689,6 +694,13 @@
         socket.on('qr', (qrUrl) => {
             document.getElementById('qr-login-screen').classList.remove('hidden');
             document.getElementById('qr-box').innerHTML = `<img src="${qrUrl}" class="w-full h-full object-contain rounded-xl" />`;
+        });
+
+        socket.on('pairing_code', (code) => {
+            const el = document.getElementById('pairing-code-display');
+            el.innerText = code;
+            el.classList.remove('hidden');
+            showToast('Kode Tautan 8 Digit Siap!', `Masukkan kode ${code} di WhatsApp HP kamu.`);
         });
 
         socket.on('auth_status', (msg) => {
