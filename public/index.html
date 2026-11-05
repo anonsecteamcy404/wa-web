@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp iGlass</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: radial-gradient(circle at 15% 15%, #0c2527 0%, #080d1a 45%, #060913 100%);
+            color: #f3f4f6;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+
+        .iglass-header {
+            background: rgba(13, 19, 34, 0.85);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .iglass-nav-pill {
+            background: rgba(20, 28, 46, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        .iglass-container {
+            background: rgba(13, 19, 33, 0.8);
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
+        }
+
+        .iglass-bubble {
+            background: rgba(23, 33, 53, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+        }
+
+        .iglass-bubble-me {
+            background: linear-gradient(135deg, rgba(6, 95, 70, 0.72), rgba(15, 82, 78, 0.62));
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+        }
+
+        .iglass-voice-box {
+            background: rgba(30, 41, 64, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+        }
+
+        .chat-item-active {
+            background: linear-gradient(90deg, rgba(16, 185, 129, 0.16) 0%, rgba(16, 185, 129, 0.03) 100%);
+            border-left: 3.5px solid #10b981;
+        }
+
+        .wave-bar {
+            width: 3px;
+            border-radius: 999px;
+            background: rgba(156, 163, 175, 0.45);
+            transition: background 0.2s, transform 0.2s;
+        }
+        .playing .wave-bar {
+            background: #10b981;
+            animation: wavePulse 0.7s infinite ease-in-out alternate;
+        }
+        @keyframes wavePulse {
+            0% { transform: scaleY(0.55); }
+            100% { transform: scaleY(1.4); }
+        }
+
+        @keyframes heartFloat {
+            0% { transform: scale(0.8) translateY(0); opacity: 1; }
+            100% { transform: scale(1.8) translateY(-60px); opacity: 0; }
+        }
+        .animate-heart {
+            animation: heartFloat 0.8s ease-out forwards;
+        }
+
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 99px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); }
+    </style>
+</head>
+<body class="flex flex-col">
+
+    <!-- ==================== NOTIFIKASI TOAST ==================== -->
+    <div id="toast-box" class="fixed top-5 right-5 z-50 hidden px-4 py-3 rounded-2xl bg-[#131d31]/95 border border-emerald-500/40 shadow-2xl flex items-center gap-3 text-xs">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+        <div>
+            <div id="toast-title" class="font-bold text-white">Info</div>
+            <div id="toast-msg" class="text-gray-300 text-[11px]"></div>
+        </div>
+    </div>
+
+    <!-- ==================== MODAL PREVIEW FOTO PROFIL (LIGHTBOX FULL HD) ==================== -->
+    <div id="pp-lightbox" onclick="closePPLightbox()" class="hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex flex-col items-center justify-center p-4 cursor-zoom-out">
+        <img id="pp-lightbox-img" src="" class="max-w-md max-h-[75vh] rounded-3xl border-2 border-white/20 shadow-2xl object-contain mb-3" />
+        <h4 id="pp-lightbox-name" class="text-sm font-bold text-white"></h4>
+        <p class="text-xs text-gray-400 mt-1">Klik di mana saja untuk menutup</p>
+    </div>
+
+    <!-- ==================== MODAL KONEKSI SERVER BACKEND (KHUSUS VERCEL / CLOUDFLARE) ==================== -->
+    <div id="server-modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
+        <div class="iglass-container rounded-3xl max-w-md w-full p-6 border border-white/15">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-bold flex items-center gap-2">
+                    <i data-lucide="globe" class="w-5 h-5 text-emerald-400"></i>
+                    <span>Koneksi Server Backend (Vercel / Tunnel)</span>
+                </h3>
+                <button onclick="closeServerModal()" class="text-gray-400 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <p class="text-xs text-gray-400 mb-4 leading-relaxed">
+                Jika halaman ini dibuka melalui <b>Vercel</b>, masukkan URL publik <b>Cloudflare Tunnel</b> dari terminal Linux kamu (contoh: <code class="text-emerald-400">https://xxxx.trycloudflare.com</code>). Kosongkan jika dibuka langsung dari localhost/tunnel.
+            </p>
+            <input id="backend-url-input" type="text" placeholder="https://xxxx.trycloudflare.com" class="w-full rounded-xl bg-[#151e31] border border-white/15 px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 mb-4">
+            <div class="flex gap-2">
+                <button onclick="saveBackendUrl()" class="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-xs font-semibold text-white transition">
+                    Simpan & Hubungkan
+                </button>
+                <button onclick="resetBackendUrl()" class="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-gray-300 transition">
+                    Reset Default
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== LAYAR SCAN QR (SAAT BELUM LOGIN) ==================== -->
+    <div id="qr-login-screen" class="fixed inset-0 z-40 bg-[#060913]/95 backdrop-blur-2xl flex items-center justify-center p-4">
+        <div class="iglass-container rounded-3xl max-w-md w-full p-8 flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/25 mb-4">
+                <i data-lucide="message-square" class="w-7 h-7 text-white"></i>
+            </div>
+            <div class="flex items-center gap-1.5 text-xl font-bold mb-1">
+                <span>WhatsApp</span><span class="text-emerald-400">iGlass</span>
+            </div>
+            <p class="text-xs text-gray-400 leading-relaxed mb-6">
+                Buka WhatsApp di HP kamu &rarr; <b>Perangkat Tertaut</b> &rarr; <b>Tautkan Perangkat</b> lalu scan QR Code di bawah ini.
+            </p>
+
+            <div id="qr-box" class="w-60 h-60 rounded-2xl bg-white p-3.5 flex items-center justify-center shadow-2xl mb-5">
+                <div class="flex flex-col items-center gap-3 text-gray-700">
+                    <div class="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                    <span id="qr-status-text" class="text-xs font-medium">Menyiapkan QR Code...</span>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-4 py-2 rounded-full mb-3">
+                <i data-lucide="shield-check" class="w-4 h-4"></i>
+                <span>Real-Time Sync, Status Story & Auto-Export Aktif</span>
+            </div>
+
+            <button onclick="openServerModal()" class="text-[11px] text-gray-400 hover:text-emerald-400 underline flex items-center gap-1 mt-1">
+                <i data-lucide="globe" class="w-3 h-3"></i> Atur URL Server Backend (Untuk Vercel)
+            </button>
+        </div>
+    </div>
+
+    <!-- ==================== TOP HEADER BAR ==================== -->
+    <header class="iglass-header h-16 px-5 flex items-center justify-between shrink-0 z-20">
+        
+        <!-- Left: Logo & Battery -->
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                <i data-lucide="message-square" class="w-5 h-5 text-white"></i>
+            </div>
+            <div>
+                <div class="flex items-center gap-1 text-base font-bold tracking-tight leading-none">
+                    <span class="text-white">WhatsApp</span>
+                    <span class="text-emerald-400">iGlass</span>
+                </div>
+                <div class="flex items-center gap-1.5 text-[11px] text-gray-400 mt-1">
+                    <i data-lucide="battery-charging" class="w-3.5 h-3.5 text-emerald-400"></i>
+                    <span id="header-battery">100%</span>
+                    <span>•</span>
+                    <i data-lucide="wifi" class="w-3 h-3 text-emerald-400"></i>
+                    <span id="header-conn" class="text-gray-300">Terhubung</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: Navigation Pill -->
+        <nav class="iglass-nav-pill rounded-2xl p-1.5 hidden lg:flex items-center gap-1">
+            <button onclick="switchMainTab('chats')" id="tab-btn-chats" class="px-3.5 py-1.5 rounded-xl bg-white/10 text-white text-xs font-medium flex items-center gap-2 transition">
+                <i data-lucide="message-square" class="w-3.5 h-3.5"></i>
+                <span>Obrolan</span>
+                <span id="nav-unread-badge" class="px-1.5 py-0.2 bg-emerald-500 text-white text-[10px] font-bold rounded-full">0</span>
+            </button>
+
+            <button onclick="switchMainTab('status')" id="tab-btn-status" class="px-3.5 py-1.5 rounded-xl text-gray-400 hover:text-white text-xs font-medium flex items-center gap-2 transition">
+                <i data-lucide="circle-dot" class="w-3.5 h-3.5"></i>
+                <span>Status</span>
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            </button>
+
+            <button onclick="switchMainTab('calls')" id="tab-btn-calls" class="px-3.5 py-1.5 rounded-xl text-gray-400 hover:text-white text-xs font-medium flex items-center gap-2 transition">
+                <i data-lucide="phone" class="w-3.5 h-3.5"></i>
+                <span>Panggilan</span>
+                <span id="nav-calls-badge" class="hidden px-1.5 py-0.2 bg-rose-500 text-white text-[10px] font-bold rounded-full">0</span>
+            </button>
+
+            <button onclick="switchMainTab('media')" id="tab-btn-media" class="px-3.5 py-1.5 rounded-xl text-gray-400 hover:text-white text-xs font-medium flex items-center gap-2 transition">
+                <i data-lucide="folder" class="w-3.5 h-3.5"></i>
+                <span>Media & Dokumen</span>
+            </button>
+
+            <button onclick="switchMainTab('linked')" id="tab-btn-linked" class="px-3.5 py-1.5 rounded-xl text-gray-400 hover:text-white text-xs font-medium flex items-center gap-2 transition">
+                <i data-lucide="laptop" class="w-3.5 h-3.5"></i>
+                <span>Perangkat Tertaut</span>
+            </button>
+
+            <button onclick="switchMainTab('profile')" id="tab-btn-profile" class="px-3.5 py-1.5 rounded-xl text-gray-400 hover:text-white text-xs font-medium flex items-center gap-2 transition">
+                <div id="nav-mini-pp" class="w-4 h-4 rounded-full bg-emerald-500 overflow-hidden flex items-center justify-center text-[9px] font-bold text-white">
+                    <i data-lucide="user" class="w-3 h-3"></i>
+                </div>
+                <span>Profil</span>
+            </button>
+        </nav>
+
+        <!-- Right: Action Buttons -->
+        <div class="flex items-center gap-2">
+            <button onclick="openExportModal()" class="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition active:scale-95">
+                <i data-lucide="cloud-download" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">Ekspor & Cadangan</span>
+            </button>
+
+            <button onclick="openServerModal()" class="w-9 h-9 rounded-xl bg-[#161f33] border border-white/10 flex items-center justify-center text-cyan-400 hover:bg-white/10 transition" title="Pengaturan URL Server Backend (Vercel / Tunnel)">
+                <i data-lucide="globe" class="w-4 h-4"></i>
+            </button>
+
+            <button onclick="toggleThemeGlow()" class="w-9 h-9 rounded-xl bg-[#161f33] border border-white/10 flex items-center justify-center text-amber-400 hover:bg-white/10 transition" title="Ubah Cahaya Latar">
+                <i data-lucide="sun" class="w-4 h-4"></i>
+            </button>
+
+            <button onclick="logoutRealWA()" class="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/25 flex items-center justify-center text-rose-400 hover:bg-rose-500/20 transition" title="Putuskan Tautan / Logout WA">
+                <i data-lucide="log-out" class="w-4 h-4"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- ==================== MAIN CONTAINER ==================== -->
+    <main class="flex-1 p-3.5 overflow-hidden flex">
+        <div class="iglass-container w-full h-full rounded-2xl flex overflow-hidden relative">
+
+            <!-- ================= TAB 1: OBROLAN REAL ================= -->
+            <div id="view-chats" class="w-full h-full flex overflow-hidden">
+                
+                <!-- LEFT SIDEBAR: CHAT LIST -->
+                <aside class="w-[340px] sm:w-[370px] border-r border-white/[0.08] flex flex-col bg-[#0b101d]/50 shrink-0">
+                    <div class="p-3.5 space-y-3 border-b border-white/[0.06]">
+                        <div class="relative">
+                            <i data-lucide="search" class="w-4 h-4 text-gray-400 absolute left-3.5 top-2.5"></i>
+                            <input id="search-input" type="text" oninput="renderChatList()" placeholder="Cari obrolan, kontak, atau pesan..." class="w-full pl-10 pr-4 py-2 rounded-xl bg-[#151e31] border border-white/10 text-xs text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500/60 transition">
+                        </div>
+
+                        <div class="flex items-center gap-2 text-xs">
+                            <button onclick="setFilter('all')" id="pill-all" class="px-3.5 py-1 rounded-full bg-emerald-500 text-white font-semibold transition">Semua</button>
+                            <button onclick="setFilter('unread')" id="pill-unread" class="px-3.5 py-1 rounded-full text-gray-300 hover:bg-white/5 transition">Belum Dibaca</button>
+                            <button onclick="setFilter('group')" id="pill-group" class="px-3.5 py-1 rounded-full text-gray-300 hover:bg-white/5 transition">Grup</button>
+                        </div>
+                    </div>
+
+                    <div id="chat-list-container" class="flex-1 overflow-y-auto divide-y divide-white/[0.05]">
+                        <div class="p-8 text-center text-xs text-gray-400">Memuat daftar obrolan WhatsApp...</div>
+                    </div>
+                </aside>
+
+                <!-- RIGHT AREA: RUANG CHAT -->
+                <section class="flex-1 flex flex-col bg-[#0d1424]/40 overflow-hidden">
+                    <div id="room-empty" class="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                        <div class="w-16 h-16 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-3">
+                            <i data-lucide="messages-square" class="w-8 h-8"></i>
+                        </div>
+                        <h3 class="text-sm font-bold text-white mb-1">Pilih Obrolan WhatsApp</h3>
+                        <p class="text-xs text-gray-400 max-w-xs">Klik salah satu kontak atau grup di sebelah kiri untuk membuka percakapan asli kamu.</p>
+                    </div>
+
+                    <div id="room-active" class="hidden flex-1 flex flex-col overflow-hidden">
+                        <!-- Header Kontak (Klik Foto Profil untuk Zoom HD) -->
+                        <div class="h-16 px-6 border-b border-white/[0.08] flex items-center justify-between shrink-0 bg-[#101829]/60">
+                            <div class="flex items-center gap-3.5 min-w-0">
+                                <div onclick="zoomActiveChatPP()" class="relative shrink-0 cursor-zoom-in group" title="Klik untuk lihat Foto Profil penuh">
+                                    <div id="room-avatar-box" class="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center font-bold text-sm text-white overflow-hidden group-hover:ring-2 ring-emerald-400 transition">
+                                        WA
+                                    </div>
+                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#101829] absolute bottom-0 right-0"></span>
+                                </div>
+                                <div class="min-w-0">
+                                    <h2 id="room-name" class="text-sm font-bold text-white leading-tight truncate">-</h2>
+                                    <p id="room-status" class="text-xs text-gray-400 truncate">Online</p>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center gap-3 shrink-0">
+                                <button onclick="exportCurrentChat()" class="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 hover:bg-emerald-500/25 text-xs font-semibold flex items-center gap-1.5 transition">
+                                    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                                    <span>Ekspor</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Messages Container -->
+                        <div id="messages-container" class="flex-1 overflow-y-auto px-7 py-5 space-y-5"></div>
+
+                        <!-- Emoji Popover -->
+                        <div id="emoji-popover" class="hidden px-6 py-2.5 bg-[#121c30] border-t border-white/10 flex items-center gap-3 overflow-x-auto">
+                            <button onclick="addEmojiToInput('👍')" class="text-lg hover:scale-125 transition">👍</button>
+                            <button onclick="addEmojiToInput('❤️')" class="text-lg hover:scale-125 transition">❤️</button>
+                            <button onclick="addEmojiToInput('😂')" class="text-lg hover:scale-125 transition">😂</button>
+                            <button onclick="addEmojiToInput('🔥')" class="text-lg hover:scale-125 transition">🔥</button>
+                            <button onclick="addEmojiToInput('🙏')" class="text-lg hover:scale-125 transition">🙏</button>
+                            <button onclick="addEmojiToInput('😭')" class="text-lg hover:scale-125 transition">😭</button>
+                            <button onclick="addEmojiToInput('🎉')" class="text-lg hover:scale-125 transition">🎉</button>
+                            <button onclick="addEmojiToInput('😎')" class="text-lg hover:scale-125 transition">😎</button>
+                        </div>
+
+                        <!-- Input Bar -->
+                        <div class="px-6 py-3.5 border-t border-white/[0.08] bg-[#0e1627]/80 flex items-center gap-3 shrink-0">
+                            <button onclick="document.getElementById('emoji-popover').classList.toggle('hidden')" class="p-2 text-gray-400 hover:text-white transition">
+                                <i data-lucide="smile" class="w-5 h-5"></i>
+                            </button>
+
+                            <label class="p-2 text-gray-400 hover:text-white cursor-pointer transition">
+                                <i data-lucide="paperclip" class="w-5 h-5"></i>
+                                <input type="file" id="file-upload" class="hidden" onchange="handleMediaUpload(event)">
+                            </label>
+
+                            <input id="chat-input" type="text" oninput="updateActionBtn()" onkeydown="if(event.key==='Enter') triggerSendOrRecord()" placeholder="Ketik pesan..." class="flex-1 bg-[#172135] border border-white/10 rounded-full px-5 py-2.5 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500/50 transition">
+
+                            <button id="action-btn" onclick="triggerSendOrRecord()" class="w-10 h-10 rounded-full bg-[#133534] border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition shrink-0">
+                                <i id="action-icon" data-lucide="mic" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- ================= TAB 2: STATUS (STORY) WA REAL (LIHAT, UPLOAD & LIKE STATUS) ================= -->
+            <div id="view-status" class="hidden w-full h-full flex overflow-hidden">
+                
+                <!-- Sidebar Kiri: Daftar Status Teman & Tombol Buat Status -->
+                <aside class="w-[340px] sm:w-[370px] border-r border-white/[0.08] flex flex-col bg-[#0b101d]/50 shrink-0">
+                    <div class="p-4 border-b border-white/[0.06] flex items-center justify-between">
+                        <div>
+                            <h3 class="text-sm font-bold text-white">Pembaruan Status</h3>
+                            <p class="text-[11px] text-gray-400">Lihat & sukai Story kontak kamu</p>
+                        </div>
+                        <button onclick="showCreateStatusPane()" class="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 transition">
+                            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Buat Status
+                        </button>
+                    </div>
+
+                    <div id="status-list-container" class="flex-1 overflow-y-auto divide-y divide-white/[0.05]">
+                        <div class="p-8 text-center text-xs text-gray-500">Belum ada status terbaru dari kontak.</div>
+                    </div>
+                </aside>
+
+                <!-- Area Kanan: Story Viewer (Lihat Status & Like ❤️) atau Form Buat Status -->
+                <section class="flex-1 flex flex-col bg-[#0d1424]/40 overflow-hidden relative">
+
+                    <!-- Mode 1: Form Buat Status Baru -->
+                    <div id="status-create-pane" class="flex-1 flex flex-col items-center justify-center p-8">
+                        <div class="iglass-bubble p-7 rounded-3xl max-w-lg w-full">
+                            <h3 class="text-base font-bold mb-1 flex items-center gap-2">
+                                <i data-lucide="circle-dot" class="w-5 h-5 text-emerald-400"></i>
+                                <span>Publikasikan Status (Story) WhatsApp</span>
+                            </h3>
+                            <p class="text-xs text-gray-400 mb-4">Status yang kamu tulis di sini langsung tayang ke Story WhatsApp asli kamu.</p>
+
+                            <textarea id="status-text-input" rows="4" placeholder="Tulis pembaruan status WhatsApp..." class="w-full rounded-2xl bg-[#151e31] border border-white/10 p-4 text-sm text-white focus:outline-none focus:border-emerald-500 mb-4"></textarea>
+
+                            <div class="flex items-center justify-between mb-5">
+                                <span class="text-xs text-gray-400">Warna Latar Story:</span>
+                                <div class="flex items-center gap-2">
+                                    <button onclick="selectStatusColor('#059669')" class="w-6 h-6 rounded-full bg-[#059669] ring-2 ring-white"></button>
+                                    <button onclick="selectStatusColor('#2563eb')" class="w-6 h-6 rounded-full bg-[#2563eb]"></button>
+                                    <button onclick="selectStatusColor('#7c3aed')" class="w-6 h-6 rounded-full bg-[#7c3aed]"></button>
+                                    <button onclick="selectStatusColor('#db2777')" class="w-6 h-6 rounded-full bg-[#db2777]"></button>
+                                    <button onclick="selectStatusColor('#1e293b')" class="w-6 h-6 rounded-full bg-[#1e293b]"></button>
+                                </div>
+                            </div>
+
+                            <button onclick="postRealStatus()" class="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-xs font-semibold text-white shadow-lg shadow-emerald-500/25 transition">
+                                Kirim ke Status WhatsApp Saya
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Mode 2: Story Player / Lihat Status Teman & Tombol Like ❤️ -->
+                    <div id="status-viewer-pane" class="hidden flex-1 flex flex-col justify-between p-6 relative">
+                        <div class="flex items-center justify-between bg-black/40 backdrop-blur-md p-3.5 rounded-2xl border border-white/10">
+                            <div class="flex items-center gap-3">
+                                <div id="sv-avatar" class="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center font-bold text-sm overflow-hidden border-2 border-emerald-400">
+                                    WA
+                                </div>
+                                <div>
+                                    <h4 id="sv-name" class="text-xs font-bold text-white">-</h4>
+                                    <p id="sv-time" class="text-[11px] text-gray-400">Hari ini</p>
+                                </div>
+                            </div>
+                            <button onclick="showCreateStatusPane()" class="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs flex items-center gap-1.5">
+                                <i data-lucide="plus" class="w-3.5 h-3.5"></i> Buat Status Baru
+                            </button>
+                        </div>
+
+                        <div id="sv-card" class="my-auto mx-auto max-w-lg w-full min-h-[300px] rounded-3xl p-8 flex flex-col items-center justify-center text-center shadow-2xl border border-white/15 relative overflow-hidden" style="background: #059669;">
+                            <div id="sv-media-box" class="mb-4 max-h-72 overflow-hidden rounded-2xl"></div>
+                            <p id="sv-body" class="text-lg font-bold text-white leading-relaxed break-words"></p>
+                            <div id="heart-anim-container" class="pointer-events-none absolute inset-0 flex items-center justify-center"></div>
+                        </div>
+
+                        <div class="flex items-center gap-3 max-w-lg w-full mx-auto">
+                            <input id="sv-reply-input" type="text" onkeydown="if(event.key==='Enter') replyToActiveStatus()" placeholder="Balas status ini..." class="flex-1 bg-[#172135] border border-white/15 rounded-full px-5 py-2.5 text-xs text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500">
+
+                            <button onclick="replyToActiveStatus()" class="px-4 py-2.5 rounded-full bg-emerald-500 hover:bg-emerald-600 text-xs font-semibold text-white transition">
+                                Kirim
+                            </button>
+
+                            <button onclick="likeActiveStatus()" id="btn-like-status" class="w-11 h-11 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 hover:bg-rose-500 hover:text-white flex items-center justify-center transition shadow-lg shrink-0" title="Sukai Status Ini (❤️)">
+                                <i data-lucide="heart" class="w-5 h-5 fill-current"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                </section>
+            </div>
+
+            <!-- ================= TAB 3: PANGGILAN ================= -->
+            <div id="view-calls" class="hidden w-full h-full p-6 overflow-y-auto">
+                <h3 class="text-base font-bold mb-1">Log Panggilan Masuk Real-Time</h3>
+                <p class="text-xs text-gray-400 mb-5">Mencatat semua panggilan suara & video yang masuk ke WhatsApp kamu.</p>
+                <div id="calls-list-box" class="space-y-2.5">
+                    <div class="iglass-bubble p-6 rounded-2xl text-center text-xs text-gray-400">
+                        Belum ada panggilan masuk selama sesi ini berlangsung.
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================= TAB 4: MEDIA & DOKUMEN ================= -->
+            <div id="view-media" class="hidden w-full h-full p-6 overflow-y-auto">
+                <div class="mb-5">
+                    <h3 class="text-base font-bold">Media & Dokumen Terunduh Otomatis</h3>
+                    <p class="text-xs text-gray-400">Seluruh riwayat chat (.TXT), foto, video, dan voice note tersimpan di folder <code class="text-emerald-400">/exports</code>.</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="iglass-bubble p-5 rounded-2xl">
+                        <h4 class="text-xs font-bold uppercase tracking-wider text-emerald-400 mb-3 flex items-center gap-2">
+                            <i data-lucide="file-text" class="w-4 h-4"></i> Arsip Teks Obrolan (.TXT)
+                        </h4>
+                        <div id="vault-chat-files" class="space-y-2 max-h-[420px] overflow-y-auto pr-1"></div>
+                    </div>
+
+                    <div class="iglass-bubble p-5 rounded-2xl">
+                        <h4 class="text-xs font-bold uppercase tracking-wider text-cyan-400 mb-3 flex items-center gap-2">
+                            <i data-lucide="folder-down" class="w-4 h-4"></i> File Media, Foto & Voice Note
+                        </h4>
+                        <div id="vault-media-files" class="space-y-2 max-h-[420px] overflow-y-auto pr-1"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================= TAB 5: PERANGKAT TERTAUT ================= -->
+            <div id="view-linked" class="hidden w-full h-full flex items-center justify-center p-6 overflow-y-auto">
+                <div class="iglass-bubble p-8 rounded-3xl max-w-md w-full text-center">
+                    <div onclick="zoomMyPP()" id="linked-avatar" class="w-24 h-24 rounded-full bg-emerald-600 mx-auto mb-4 flex items-center justify-center text-xl font-bold overflow-hidden border-2 border-emerald-400 cursor-zoom-in shadow-xl">
+                        WA
+                    </div>
+                    <h3 id="linked-name" class="text-lg font-bold">-</h3>
+                    <p id="linked-number" class="text-xs text-emerald-400 font-mono mt-0.5 mb-4">-</p>
+
+                    <div class="bg-black/30 rounded-2xl p-4 text-left space-y-2.5 text-xs mb-5 border border-white/10">
+                        <div class="flex justify-between"><span class="text-gray-400">Status Sesi:</span><span class="text-emerald-400 font-semibold">Terhubung (Aktif)</span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Platform HP:</span><span id="linked-platform" class="text-white">-</span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Auto-Backup Chat & Media:</span><span class="text-emerald-400 font-semibold">Aktif Otomatis</span></div>
+                        <div class="flex justify-between items-center pt-1 border-t border-white/10">
+                            <span class="text-gray-400">Cloudflare Tunnel:</span>
+                            <span id="linked-tunnel" class="text-cyan-400 font-mono text-[11px] truncate max-w-[180px]">Lokal / Aktif</span>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2.5">
+                        <button onclick="copyShareableLink()" class="w-full py-2.5 rounded-xl bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/30 text-xs font-semibold transition flex items-center justify-center gap-2">
+                            <i data-lucide="share-2" class="w-4 h-4"></i> Salin Link Akses Publik / Vercel
+                        </button>
+
+                        <button onclick="logoutRealWA()" class="w-full py-2.5 rounded-xl bg-rose-500/20 border border-rose-500/30 text-rose-400 hover:bg-rose-500/30 text-xs font-semibold transition">
+                            Putuskan Perangkat Tertaut (Logout)
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================= TAB 6: HALAMAN PROFIL WA ASLI (PP, NAMA, BIO, NOMOR) ================= -->
+            <div id="view-profile" class="hidden w-full h-full p-6 overflow-y-auto flex items-center justify-center">
+                <div class="iglass-bubble p-8 rounded-3xl max-w-2xl w-full grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                    
+                    <!-- Kolom Kiri: Foto Profil Besar & Info Akun -->
+                    <div class="flex flex-col items-center text-center border-b md:border-b-0 md:border-r border-white/10 pb-6 md:pb-0 md:pr-6">
+                        <div class="relative group mb-4">
+                            <div onclick="zoomMyPP()" id="prof-page-avatar" class="w-36 h-36 rounded-full bg-emerald-600 flex items-center justify-center text-3xl font-bold overflow-hidden border-4 border-emerald-500/40 shadow-2xl cursor-zoom-in">
+                                WA
+                            </div>
+                            <label class="absolute bottom-1 right-1 w-10 h-10 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white flex items-center justify-center shadow-lg cursor-pointer transition" title="Ganti Foto Profil WhatsApp">
+                                <i data-lucide="camera" class="w-5 h-5"></i>
+                                <input type="file" accept="image/*" class="hidden" onchange="uploadNewProfilePic(event)">
+                            </label>
+                        </div>
+
+                        <h3 id="prof-page-name" class="text-lg font-bold text-white">-</h3>
+                        <p id="prof-page-number" class="text-xs text-emerald-400 font-mono mt-0.5 mb-2">-</p>
+                        <p id="prof-page-bio" class="text-xs text-gray-300 bg-white/5 px-4 py-2 rounded-xl border border-white/10 w-full break-words">Ada</p>
+                        <span class="text-[11px] text-gray-400 mt-3">Klik foto untuk memperbesar • Klik ikon kamera untuk ganti PP</span>
+                    </div>
+
+                    <!-- Kolom Kanan: Form Edit Nama & Bio WA -->
+                    <div class="space-y-4">
+                        <h4 class="text-sm font-bold flex items-center gap-2 text-emerald-400">
+                            <i data-lucide="user-pen" class="w-4 h-4"></i>
+                            <span>Edit Profil WhatsApp Asli</span>
+                        </h4>
+
+                        <div>
+                            <label class="text-[11px] text-gray-400 font-semibold uppercase">Nama Tampilan (Pushname)</label>
+                            <input id="prof-edit-name" type="text" class="w-full mt-1.5 rounded-xl bg-[#151e31] border border-white/15 px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500">
+                        </div>
+
+                        <div>
+                            <label class="text-[11px] text-gray-400 font-semibold uppercase">Info / Bio (About)</label>
+                            <textarea id="prof-edit-about" rows="3" class="w-full mt-1.5 rounded-xl bg-[#151e31] border border-white/15 px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500"></textarea>
+                        </div>
+
+                        <button onclick="saveRealProfile()" class="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-xs font-semibold text-white shadow-lg shadow-emerald-500/20 transition">
+                            Simpan Perubahan ke WhatsApp
+                        </button>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- ==================== MODAL EKSPOR & CADANGAN ==================== -->
+    <div id="export-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+        <div class="iglass-container rounded-3xl max-w-md w-full p-6 border border-white/15">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-bold flex items-center gap-2">
+                    <i data-lucide="cloud-download" class="w-5 h-5 text-emerald-400"></i>
+                    <span>Pengaturan Auto-Export & Cadangan</span>
+                </h3>
+                <button onclick="closeExportModal()" class="text-gray-400 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="space-y-3 mb-6">
+                <label class="flex items-center justify-between p-3.5 rounded-2xl bg-white/5 border border-white/10 cursor-pointer">
+                    <div>
+                        <div class="text-xs font-semibold">Auto-Export Pesan Teks (.TXT)</div>
+                        <div class="text-[11px] text-gray-400">Simpan otomatis setiap pesan baru</div>
+                    </div>
+                    <input type="checkbox" id="cfg-chat" checked class="accent-emerald-500 w-4 h-4">
+                </label>
+
+                <label class="flex items-center justify-between p-3.5 rounded-2xl bg-white/5 border border-white/10 cursor-pointer">
+                    <div>
+                        <div class="text-xs font-semibold">Auto-Download Media & Voice Note</div>
+                        <div class="text-[11px] text-gray-400">Simpan foto, video, dokumen & audio otomatis</div>
+                    </div>
+                    <input type="checkbox" id="cfg-media" checked class="accent-emerald-500 w-4 h-4">
+                </label>
+            </div>
+
+            <div class="flex gap-2">
+                <button onclick="exportCurrentChat(); closeExportModal();" class="flex-1 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-xs font-semibold text-white transition">
+                    Ekspor Penuh Obrolan Aktif
+                </button>
+                <button onclick="switchMainTab('media'); closeExportModal();" class="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium transition">
+                    Lihat File
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        // ==================== SMART VERCEL & CLOUDFLARE TUNNEL CONNECTOR ====================
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('server')) {
+            localStorage.setItem('IGLASS_BACKEND_URL', urlParams.get('server').replace(/\/$/, ''));
+        }
+
+        let BACKEND_URL = localStorage.getItem('IGLASS_BACKEND_URL') || '';
+        const isVercel = window.location.hostname.includes('vercel.app');
+
+        if (isVercel && !BACKEND_URL) {
+            setTimeout(() => openServerModal(), 600);
+        }
+
+        function resolveUrl(pathOrUrl) {
+            if (!pathOrUrl) return '';
+            if (pathOrUrl.startsWith('http') || pathOrUrl.startsWith('data:')) return pathOrUrl;
+            return (BACKEND_URL || '') + pathOrUrl;
+        }
+
+        function openServerModal() {
+            document.getElementById('backend-url-input').value = BACKEND_URL;
+            document.getElementById('server-modal').classList.remove('hidden');
+        }
+        function closeServerModal() {
+            document.getElementById('server-modal').classList.add('hidden');
+        }
+        function saveBackendUrl() {
+            const val = document.getElementById('backend-url-input').value.trim().replace(/\/$/, '');
+            localStorage.setItem('IGLASS_BACKEND_URL', val);
+            location.reload();
+        }
+        function resetBackendUrl() {
+            localStorage.removeItem('IGLASS_BACKEND_URL');
+            location.href = window.location.pathname;
+        }
+
+        const socket = io(BACKEND_URL || undefined, {
+            transports: ['websocket', 'polling']
+        });
+
+        let myProfile = {};
+        let allChats = [];
+        let chatPics = {};
+        let allStatuses = [];
+        let activeStatus = null;
+        let selectedStatusColor = '#059669';
+        let currentFilter = 'all';
+        let activeChatId = null;
+        let activeChatName = '';
+        let activeChatPic = null;
+        let audioPlayers = {};
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+
+        const avatarColors = ['bg-indigo-500', 'bg-sky-600', 'bg-emerald-600', 'bg-pink-600', 'bg-purple-600', 'bg-amber-600'];
+
+        function showToast(title, message) {
+            const box = document.getElementById('toast-box');
+            document.getElementById('toast-title').innerText = title;
+            document.getElementById('toast-msg').innerText = message;
+            box.classList.remove('hidden');
+            setTimeout(() => box.classList.add('hidden'), 3500);
+        }
+
+        // ==================== LIGHTBOX ZOOM FOTO PROFIL ====================
+        function openPPLightbox(url, name) {
+            if (!url) {
+                showToast('Foto Profil', 'Kontak ini tidak memasang foto profil publik.');
+                return;
+            }
+            document.getElementById('pp-lightbox-img').src = resolveUrl(url);
+            document.getElementById('pp-lightbox-name').innerText = name || 'Foto Profil';
+            document.getElementById('pp-lightbox').classList.remove('hidden');
+        }
+        function closePPLightbox() {
+            document.getElementById('pp-lightbox').classList.add('hidden');
+        }
+        function zoomMyPP() {
+            openPPLightbox(myProfile.picUrl, myProfile.name);
+        }
+        function zoomActiveChatPP() {
+            openPPLightbox(activeChatPic || chatPics[activeChatId], activeChatName);
+        }
+
+        // ==================== SOCKET.IO EVENTS ====================
+        socket.on('qr', (qrUrl) => {
+            document.getElementById('qr-login-screen').classList.remove('hidden');
+            document.getElementById('qr-box').innerHTML = `<img src="${qrUrl}" class="w-full h-full object-contain rounded-xl" />`;
+        });
+
+        socket.on('auth_status', (msg) => {
+            const st = document.getElementById('qr-status-text');
+            if (st) st.innerText = msg;
+        });
+
+        socket.on('ready', (profile) => {
+            myProfile = profile;
+            document.getElementById('qr-login-screen').classList.add('hidden');
+            document.getElementById('header-battery').innerText = `${profile.battery}%`;
+            document.getElementById('header-conn').innerText = 'Terhubung';
+
+            document.getElementById('linked-name').innerText = profile.name;
+            document.getElementById('linked-number').innerText = `+${profile.number}`;
+            document.getElementById('linked-platform').innerText = profile.platform;
+            if (profile.tunnelUrl) {
+                document.getElementById('linked-tunnel').innerText = profile.tunnelUrl;
+            }
+
+            document.getElementById('prof-page-name').innerText = profile.name;
+            document.getElementById('prof-page-number').innerText = `+${profile.number}`;
+            document.getElementById('prof-page-bio').innerText = profile.about || 'Ada';
+            document.getElementById('prof-edit-name').value = profile.name;
+            document.getElementById('prof-edit-about').value = profile.about || '';
+
+            if (profile.picUrl) {
+                const imgHtml = `<img src="${resolveUrl(profile.picUrl)}" class="w-full h-full object-cover" />`;
+                document.getElementById('linked-avatar').innerHTML = imgHtml;
+                document.getElementById('prof-page-avatar').innerHTML = imgHtml;
+                document.getElementById('nav-mini-pp').innerHTML = imgHtml;
+            } else {
+                document.getElementById('linked-avatar').innerText = profile.initials;
+                document.getElementById('prof-page-avatar').innerText = profile.initials;
+            }
+        });
+
+        socket.on('chats', (chats) => {
+            allChats = chats;
+            const totalUnread = chats.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+            document.getElementById('nav-unread-badge').innerText = totalUnread;
+            renderChatList();
+        });
+
+        socket.on('chat_pic', ({ chatId, picUrl }) => {
+            chatPics[chatId] = picUrl;
+            const el = document.getElementById(`avatar-chat-${chatId}`);
+            if (el) {
+                el.innerHTML = `<img src="${resolveUrl(picUrl)}" class="w-full h-full object-cover rounded-full" />`;
+            }
+            if (chatId === activeChatId) {
+                activeChatPic = picUrl;
+                document.getElementById('room-avatar-box').innerHTML = `<img src="${resolveUrl(picUrl)}" class="w-full h-full object-cover" />`;
+            }
+        });
+
+        socket.on('chat_messages', (data) => {
+            activeChatId = data.chatId;
+            activeChatName = data.name;
+            activeChatPic = data.picUrl || chatPics[data.chatId] || null;
+
+            document.getElementById('room-empty').classList.add('hidden');
+            document.getElementById('room-active').classList.remove('hidden');
+
+            document.getElementById('room-name').innerText = data.name;
+            document.getElementById('room-status').innerText = data.statusInfo;
+
+            const avBox = document.getElementById('room-avatar-box');
+            if (activeChatPic) {
+                avBox.innerHTML = `<img src="${resolveUrl(activeChatPic)}" class="w-full h-full object-cover" />`;
+            } else {
+                avBox.innerText = data.initials;
+            }
+
+            renderMessages(data.messages);
+            renderChatList();
+        });
+
+        socket.on('new_message', (data) => {
+            if (data.chatId === activeChatId) {
+                appendSingleMessage(data.message);
+                const box = document.getElementById('messages-container');
+                box.scrollTop = box.scrollHeight;
+                lucide.createIcons();
+            } else if (!data.message.fromMe) {
+                showToast(data.chatName, data.message.body || 'Mengirim Media / Voice Note');
+            }
+        });
+
+        socket.on('statuses', (list) => {
+            allStatuses = list || [];
+            renderStatusList();
+        });
+
+        socket.on('call_logs', (logs) => {
+            const badge = document.getElementById('nav-calls-badge');
+            const box = document.getElementById('calls-list-box');
+            if (logs.length > 0) {
+                badge.innerText = logs.length;
+                badge.classList.remove('hidden');
+                box.innerHTML = logs.map(c => `
+                    <div class="iglass-bubble p-4 rounded-2xl flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center">
+                                <i data-lucide="${c.isVideo ? 'video' : 'phone-incoming'}" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <div class="text-xs font-bold text-white">+${c.from}</div>
+                                <div class="text-[11px] text-gray-400">Panggilan ${c.isVideo ? 'Video' : 'Suara'} Masuk</div>
+                            </div>
+                        </div>
+                        <span class="text-xs text-gray-400">${c.time}</span>
+                    </div>
+                `).join('');
+                lucide.createIcons();
+            }
+        });
+
+        socket.on('exported_files', ({ chatFiles, mediaFiles }) => {
+            const cBox = document.getElementById('vault-chat-files');
+            cBox.innerHTML = chatFiles.length ? chatFiles.map(f => `
+                <a href="${resolveUrl(f.url)}" target="_blank" download class="p-3 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-between text-xs transition block">
+                    <span class="truncate pr-3">${f.name}</span>
+                    <span class="text-emerald-400 font-bold shrink-0">${f.size}</span>
+                </a>
+            `).join('') : '<div class="text-xs text-gray-500">Belum ada file log chat.</div>';
+
+            const mBox = document.getElementById('vault-media-files');
+            mBox.innerHTML = mediaFiles.length ? mediaFiles.map(f => `
+                <a href="${resolveUrl(f.url)}" target="_blank" download class="p-3 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-between text-xs transition block">
+                    <span class="truncate pr-3">${f.name}</span>
+                    <span class="text-cyan-400 font-bold shrink-0">${f.size}</span>
+                </a>
+            `).join('') : '<div class="text-xs text-gray-500">Belum ada media terunduh.</div>';
+        });
+
+        socket.on('notify', ({ title, message }) => showToast(title, message));
+        socket.on('logged_out', () => location.reload());
+
+        // ==================== RENDER DAFTAR CHAT ====================
+        function renderChatList() {
+            const container = document.getElementById('chat-list-container');
+            const query = document.getElementById('search-input').value.toLowerCase();
+            container.innerHTML = '';
+
+            const filtered = allChats.filter(c => {
+                if (currentFilter === 'unread' && c.unreadCount === 0) return false;
+                if (currentFilter === 'group' && !c.isGroup) return false;
+                return c.name.toLowerCase().includes(query) || (c.lastMessage && c.lastMessage.toLowerCase().includes(query));
+            });
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="p-8 text-center text-xs text-gray-500">Tidak ada obrolan ditemukan.</div>';
+                return;
+            }
+
+            filtered.forEach((chat, idx) => {
+                const isActive = chat.id === activeChatId;
+                const bgClass = avatarColors[idx % avatarColors.length];
+                const pic = chatPics[chat.id] || chat.picUrl;
+
+                let statusIcon = '';
+                if (chat.lastType === 'voice') {
+                    statusIcon = `<i data-lucide="mic" class="w-3.5 h-3.5 text-emerald-400 shrink-0"></i>`;
+                } else if (chat.lastType === 'sent') {
+                    statusIcon = `<i data-lucide="check-check" class="w-3.5 h-3.5 text-sky-400 shrink-0"></i>`;
+                } else if (chat.lastType === 'image' || chat.lastType === 'video') {
+                    statusIcon = `<i data-lucide="image" class="w-3.5 h-3.5 text-gray-400 shrink-0"></i>`;
+                } else if (chat.lastType === 'document') {
+                    statusIcon = `<i data-lucide="file-text" class="w-3.5 h-3.5 text-gray-400 shrink-0"></i>`;
+                }
+
+                const item = document.createElement('div');
+                item.className = `px-4 py-3.5 flex items-center gap-3.5 cursor-pointer hover:bg-white/[0.04] transition ${isActive ? 'chat-item-active' : ''}`;
+                item.onclick = () => socket.emit('open_chat', chat.id);
+
+                item.innerHTML = `
+                    <div class="relative shrink-0">
+                        <div id="avatar-chat-${chat.id}" class="w-11 h-11 rounded-full ${bgClass} flex items-center justify-center font-bold text-sm text-white overflow-hidden shadow-md">
+                            ${pic ? `<img src="${resolveUrl(pic)}" class="w-full h-full object-cover" />` : chat.initials}
+                        </div>
+                        <span class="w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#0d1322] absolute bottom-0 right-0"></span>
+                    </div>
+
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center justify-between mb-1">
+                            <h4 class="text-xs font-bold text-white truncate">${chat.name}</h4>
+                            <span class="text-[11px] text-gray-400 shrink-0">${chat.time}</span>
+                        </div>
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="flex items-center gap-1.5 text-xs text-gray-400 truncate">
+                                ${statusIcon}
+                                <span class="truncate">${chat.lastMessage || 'Ketuk untuk membuka chat'}</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                ${chat.pinned ? `<i data-lucide="pin" class="w-3.5 h-3.5 text-amber-400 rotate-45"></i>` : ''}
+                                ${chat.unreadCount > 0 ? `<span class="w-5 h-5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center">${chat.unreadCount}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+
+            lucide.createIcons();
+        }
+
+        // ==================== RENDER DAFTAR STATUS & STORY VIEWER ====================
+        function renderStatusList() {
+            const box = document.getElementById('status-list-container');
+            if (!allStatuses || allStatuses.length === 0) {
+                box.innerHTML = '<div class="p-8 text-center text-xs text-gray-500">Belum ada status terbaru dari kontak.<br>Klik <b>+ Buat Status</b> untuk membuat Story.</div>';
+                return;
+            }
+
+            box.innerHTML = '';
+            allStatuses.forEach((s) => {
+                const div = document.createElement('div');
+                div.className = 'px-4 py-3.5 flex items-center gap-3.5 cursor-pointer hover:bg-white/[0.05] transition';
+                div.onclick = () => openStatusViewer(s);
+
+                div.innerHTML = `
+                    <div class="p-0.5 rounded-full bg-gradient-to-tr from-emerald-400 to-cyan-500 shrink-0">
+                        <div class="w-11 h-11 rounded-full bg-indigo-600 flex items-center justify-center font-bold text-xs text-white overflow-hidden border-2 border-[#0b101d]">
+                            ${s.picUrl ? `<img src="${resolveUrl(s.picUrl)}" class="w-full h-full object-cover" />` : s.initials}
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h4 class="text-xs font-bold text-white truncate">${s.authorName}</h4>
+                        <p class="text-[11px] text-gray-400 truncate">${s.body || '📷 Memposting Media Story'} • ${s.time}</p>
+                    </div>
+                `;
+                box.appendChild(div);
+            });
+        }
+
+        function showCreateStatusPane() {
+            document.getElementById('status-viewer-pane').classList.add('hidden');
+            document.getElementById('status-create-pane').classList.remove('hidden');
+        }
+
+        function openStatusViewer(s) {
+            activeStatus = s;
+            document.getElementById('status-create-pane').classList.add('hidden');
+            document.getElementById('status-viewer-pane').classList.remove('hidden');
+
+            document.getElementById('sv-name').innerText = s.authorName;
+            document.getElementById('sv-time').innerText = `Hari ini pukul ${s.time}`;
+            document.getElementById('sv-avatar').innerHTML = s.picUrl
+                ? `<img src="${resolveUrl(s.picUrl)}" class="w-full h-full object-cover" />`
+                : s.initials;
+
+            const card = document.getElementById('sv-card');
+            card.style.background = s.color || '#059669';
+            document.getElementById('sv-body').innerText = s.body || '';
+
+            const mediaBox = document.getElementById('sv-media-box');
+            if (s.mediaUrl) {
+                mediaBox.innerHTML = `<img src="${resolveUrl(s.mediaUrl)}" class="max-h-64 rounded-2xl object-contain mx-auto" />`;
+            } else {
+                mediaBox.innerHTML = '';
+            }
+        }
+
+        function selectStatusColor(hex) {
+            selectedStatusColor = hex;
+            document.getElementById('status-text-input').style.borderColor = hex;
+        }
+
+        function postRealStatus() {
+            const text = document.getElementById('status-text-input').value.trim();
+            if (!text) return;
+            socket.emit('post_wa_status', { text, color: selectedStatusColor });
+            document.getElementById('status-text-input').value = '';
+        }
+
+        function likeActiveStatus() {
+            if (!activeStatus) return;
+            const animBox = document.getElementById('heart-anim-container');
+            animBox.innerHTML = `<div class="text-6xl animate-heart">❤️</div>`;
+            socket.emit('like_status', {
+                statusId: activeStatus.id,
+                authorId: activeStatus.authorId,
+                replyText: ''
+            });
+        }
+
+        function replyToActiveStatus() {
+            if (!activeStatus) return;
+            const input = document.getElementById('sv-reply-input');
+            const text = input.value.trim();
+            if (!text) return;
+            socket.emit('like_status', {
+                statusId: activeStatus.id,
+                authorId: activeStatus.authorId,
+                replyText: text
+            });
+            input.value = '';
+        }
+
+        // ==================== RENDER PESAN CHAT ====================
+        function renderMessages(messages) {
+            const box = document.getElementById('messages-container');
+            box.innerHTML = '';
+            messages.forEach(m => appendSingleMessage(m));
+            box.scrollTop = box.scrollHeight;
+            lucide.createIcons();
+        }
+
+        function appendSingleMessage(m) {
+            const box = document.getElementById('messages-container');
+            const wrapper = document.createElement('div');
+            wrapper.className = `flex flex-col ${m.fromMe ? 'items-end' : 'items-start'}`;
+
+            const bubbleClass = m.fromMe ? 'iglass-bubble-me' : 'iglass-bubble';
+            const fullMediaUrl = resolveUrl(m.mediaUrl);
+            const reactBadge = (m.reactions && m.reactions.length > 0)
+                ? `<div class="absolute -bottom-3 right-3 px-2 py-0.5 rounded-full bg-[#1e293b] border border-white/15 text-[11px] shadow">${m.reactions.join(' ')}</div>`
+                : '';
+
+            if ((m.type === 'image' || m.type === 'sticker') && fullMediaUrl) {
+                wrapper.innerHTML = `
+                    <div class="${bubbleClass} rounded-2xl p-3 max-w-md w-full relative">
+                        <a href="${fullMediaUrl}" target="_blank" class="block relative rounded-xl overflow-hidden mb-2 bg-black/40 max-h-64">
+                            <img src="${fullMediaUrl}" class="w-full h-full object-cover" />
+                            <span class="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-md bg-black/75 text-white text-[10px] font-bold">
+                                ${m.fileSize}
+                            </span>
+                        </a>
+                        ${m.body ? `<p class="text-xs font-semibold text-white mb-1 break-words">${m.body}</p>` : ''}
+                        <div class="text-right text-[10px] text-gray-300">${m.time}</div>
+                        ${reactBadge}
+                    </div>
+                `;
+            } else if (m.type === 'ptt' || m.type === 'audio' || (m.mimetype && m.mimetype.startsWith('audio/'))) {
+                const barsHeights = [10, 16, 8, 22, 14, 18, 25, 12, 20, 15, 9, 24, 18, 12, 16, 21, 11, 14, 8, 19, 13, 17, 10, 12, 8];
+                const barsHtml = barsHeights.map(h => `<div class="wave-bar" style="height:${h}px"></div>`).join('');
+
+                wrapper.innerHTML = `
+                    <div class="${bubbleClass} rounded-2xl p-4 max-w-lg w-full relative">
+                        <div id="voice-${m.id}" class="iglass-voice-box rounded-2xl p-3.5 flex items-center gap-3.5 mb-2">
+                            <button onclick="playRealVoice('${m.id}', '${fullMediaUrl}')" class="w-10 h-10 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white flex items-center justify-center shrink-0 shadow-lg shadow-emerald-500/30 transition">
+                                <i data-lucide="play" class="w-4 h-4 fill-current ml-0.5"></i>
+                            </button>
+                            <div class="flex-1">
+                                <div class="flex items-center gap-1 h-7">${barsHtml}</div>
+                                <div class="flex items-center justify-between text-[10px] text-gray-300 mt-1 font-medium">
+                                    <span>${m.duration || '0:00'}</span>
+                                    <span>${m.fileSize}</span>
+                                </div>
+                            </div>
+                            <button onclick="cycleSpeed('${m.id}')" id="speed-${m.id}" class="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-bold text-white transition">1x</button>
+                        </div>
+                        ${m.body ? `<p class="text-xs font-semibold text-white mb-1">${m.body}</p>` : ''}
+                        <div class="text-right text-[10px] text-gray-300">${m.time}</div>
+                        ${reactBadge}
+                    </div>
+                `;
+            } else if (m.hasMedia && fullMediaUrl) {
+                wrapper.innerHTML = `
+                    <div class="${bubbleClass} rounded-2xl p-3.5 max-w-md w-full relative">
+                        <a href="${fullMediaUrl}" target="_blank" download class="flex items-center justify-between p-3 rounded-xl bg-black/30 border border-white/10 mb-2 hover:bg-black/40 transition">
+                            <div class="flex items-center gap-2.5 truncate pr-2">
+                                <i data-lucide="file-down" class="w-5 h-5 text-emerald-400 shrink-0"></i>
+                                <span class="text-xs font-medium truncate">${m.fileName}</span>
+                            </div>
+                            <span class="text-[10px] font-bold text-emerald-400 shrink-0">${m.fileSize}</span>
+                        </a>
+                        ${m.body ? `<p class="text-xs text-white mb-1 break-words">${m.body}</p>` : ''}
+                        <div class="text-right text-[10px] text-gray-300">${m.time}</div>
+                        ${reactBadge}
+                    </div>
+                `;
+            } else {
+                wrapper.innerHTML = `
+                    <div class="${bubbleClass} rounded-2xl px-4 py-3 max-w-md relative">
+                        <p class="text-xs text-white leading-relaxed break-words">${m.body}</p>
+                        <div class="flex items-center justify-end gap-1 mt-1 text-[10px] text-gray-300">
+                            <span>${m.time}</span>
+                            ${m.fromMe ? `<i data-lucide="check-check" class="w-3.5 h-3.5 text-emerald-400"></i>` : ''}
+                        </div>
+                        ${reactBadge}
+                    </div>
+                `;
+            }
+
+            const reactBar = document.createElement('div');
+            reactBar.className = 'mt-1.5 px-2.5 py-1 rounded-full bg-[#151f32] border border-white/10 flex items-center gap-2 text-xs shadow opacity-80 hover:opacity-100 transition';
+            ['👍', '❤️', '😂', '🔥'].forEach(emoji => {
+                const btn = document.createElement('button');
+                btn.className = 'hover:scale-125 transition';
+                btn.innerText = emoji;
+                btn.onclick = () => socket.emit('react_message', { chatId: activeChatId, msgId: m.id, emoji });
+                reactBar.appendChild(btn);
+            });
+            wrapper.appendChild(reactBar);
+
+            box.appendChild(wrapper);
+        }
+
+        // ==================== VOICE NOTE & MEDIA ACTIONS ====================
+        function playRealVoice(msgId, url) {
+            if (!url) return showToast('Info Audio', 'File suara sedang disinkronkan.');
+            const voiceBox = document.getElementById(`voice-${msgId}`);
+            if (!audioPlayers[msgId]) {
+                audioPlayers[msgId] = new Audio(url);
+                audioPlayers[msgId].onended = () => { if (voiceBox) voiceBox.classList.remove('playing'); };
+            }
+            const player = audioPlayers[msgId];
+            if (player.paused) {
+                player.play();
+                if (voiceBox) voiceBox.classList.add('playing');
+            } else {
+                player.pause();
+                if (voiceBox) voiceBox.classList.remove('playing');
+            }
+        }
+
+        function cycleSpeed(msgId) {
+            const btn = document.getElementById(`speed-${msgId}`);
+            const speeds = [1, 1.5, 2];
+            const current = parseFloat(btn.innerText.replace('x', '')) || 1;
+            const next = speeds[(speeds.indexOf(current) + 1) % speeds.length];
+            btn.innerText = `${next}x`;
+            if (audioPlayers[msgId]) audioPlayers[msgId].playbackRate = next;
+        }
+
+        function updateActionBtn() {
+            const text = document.getElementById('chat-input').value.trim();
+            const btn = document.getElementById('action-btn');
+            btn.innerHTML = text ? `<i data-lucide="send" class="w-4 h-4"></i>` : `<i data-lucide="mic" class="w-4 h-4"></i>`;
+            lucide.createIcons();
+        }
+
+        async function triggerSendOrRecord() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+
+            if (text && activeChatId) {
+                socket.emit('send_text', { chatId: activeChatId, text });
+                input.value = '';
+                updateActionBtn();
+                return;
+            }
+
+            if (!activeChatId) return;
+            const btn = document.getElementById('action-btn');
+
+            if (!isRecording) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(audioChunks, { type: 'audio/ogg; codecs=opus' });
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            socket.emit('send_voice_note', { chatId: activeChatId, base64: reader.result });
+                        };
+                        reader.readAsDataURL(blob);
+                        stream.getTracks().forEach(t => t.stop());
+                    };
+                    mediaRecorder.start();
+                    isRecording = true;
+                    btn.className = "w-10 h-10 rounded-full bg-rose-500 text-white animate-pulse flex items-center justify-center transition shrink-0";
+                    showToast('Merekam Voice Note...', 'Klik tombol merah lagi untuk mengirim');
+                } catch {
+                    showToast('Mikrofon Ditolak', 'Izinkan akses mikrofon di browser kamu');
+                }
+            } else {
+                mediaRecorder.stop();
+                isRecording = false;
+                btn.className = "w-10 h-10 rounded-full bg-[#133534] border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500 hover:text-white flex items-center justify-center transition shrink-0";
+            }
+        }
+
+        function handleMediaUpload(e) {
+            const file = e.target.files[0];
+            if (!file || !activeChatId) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                socket.emit('send_media', {
+                    chatId: activeChatId,
+                    base64: reader.result,
+                    mimetype: file.type || 'application/octet-stream',
+                    filename: file.name,
+                    caption: document.getElementById('chat-input').value.trim()
+                });
+                document.getElementById('chat-input').value = '';
+                updateActionBtn();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function addEmojiToInput(emoji) {
+            const input = document.getElementById('chat-input');
+            input.value += emoji;
+            input.focus();
+            updateActionBtn();
+        }
+
+        // ==================== PROFIL, SHARE LINK & NAVIGASI TAB ====================
+        function switchMainTab(tab) {
+            ['chats', 'status', 'calls', 'media', 'linked', 'profile'].forEach(t => {
+                document.getElementById(`view-${t}`).classList.add('hidden');
+                const btn = document.getElementById(`tab-btn-${t}`);
+                if (btn) btn.className = "px-3.5 py-1.5 rounded-xl text-gray-400 hover:text-white text-xs font-medium flex items-center gap-2 transition";
+            });
+            document.getElementById(`view-${tab}`).classList.remove('hidden');
+            const activeBtn = document.getElementById(`tab-btn-${tab}`);
+            if (activeBtn) activeBtn.className = "px-3.5 py-1.5 rounded-xl bg-white/10 text-white text-xs font-medium flex items-center gap-2 transition";
+        }
+
+        function setFilter(f) {
+            currentFilter = f;
+            ['all', 'unread', 'group'].forEach(k => {
+                document.getElementById(`pill-${k}`).className = (k === f)
+                    ? 'px-3.5 py-1 rounded-full bg-emerald-500 text-white font-semibold transition'
+                    : 'px-3.5 py-1 rounded-full text-gray-300 hover:bg-white/5 transition';
+            });
+            renderChatList();
+        }
+
+        function saveRealProfile() {
+            const name = document.getElementById('prof-edit-name').value.trim();
+            const about = document.getElementById('prof-edit-about').value.trim();
+            socket.emit('update_profile', { name, about });
+        }
+
+        function uploadNewProfilePic(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                socket.emit('update_profile_pic', { base64: reader.result, mimetype: file.type });
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function copyShareableLink() {
+            const tunnel = myProfile.tunnelUrl || BACKEND_URL || window.location.origin;
+            const shareUrl = isVercel
+                ? `${window.location.origin}/?server=${encodeURIComponent(tunnel)}`
+                : tunnel;
+            navigator.clipboard.writeText(shareUrl);
+            showToast('Link Disalin!', shareUrl);
+        }
+
+        function exportCurrentChat() {
+            if (!activeChatId) return showToast('Pilih Obrolan', 'Buka salah satu obrolan terlebih dahulu');
+            socket.emit('export_chat_full', activeChatId);
+        }
+
+        function openExportModal() { document.getElementById('export-modal').classList.remove('hidden'); }
+        function closeExportModal() { document.getElementById('export-modal').classList.add('hidden'); }
+
+        let glowAlt = false;
+        function toggleThemeGlow() {
+            glowAlt = !glowAlt;
+            document.body.style.background = glowAlt
+                ? 'radial-gradient(circle at 80% 15%, #1e1b4b 0%, #091526 50%, #050811 100%)'
+                : 'radial-gradient(circle at 15% 15%, #0c2527 0%, #080d1a 45%, #060913 100%)';
+        }
+
+        function logoutRealWA() {
+            if (confirm('Putuskan tautan WhatsApp dari perangkat ini?')) {
+                socket.emit('logout_wa');
+            }
+        }
+    </script>
+</body>
+</html>
